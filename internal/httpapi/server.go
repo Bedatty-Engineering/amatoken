@@ -36,6 +36,8 @@ func (s *Server) Router() http.Handler {
 		w.Write([]byte("ok"))
 	})
 
+	r.Get("/api/resources", s.handleResources)
+
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/summary", s.handleSummary)
 		r.Get("/timeseries", s.handleTimeSeries)
@@ -53,8 +55,8 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/records/{id}", s.handleDeleteRecord)
 
 		r.Get("/pricing", s.handleListPricing)
-		r.Post("/pricing", s.handleUpsertPricing)
-		r.Put("/pricing/{model}", s.handleUpsertPricing)
+		r.Post("/pricing", s.handleCreatePricing)
+		r.Put("/pricing/{model}", s.handleUpdatePricing)
 		r.Delete("/pricing/{model}", s.handleDeletePricing)
 		r.Post("/pricing/sync", s.handlePricingSync)
 		r.Get("/pricing/status", s.handlePricingStatus)

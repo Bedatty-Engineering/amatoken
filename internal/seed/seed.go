@@ -26,7 +26,7 @@ func seedExampleBudget(ctx context.Context, repo *storage.Repo) error {
 	if len(existing) > 0 {
 		return nil
 	}
-	b, err := repo.CreateBudget(ctx, "Example monthly cap", 500)
+	b, err := repo.CreateBudget(ctx, "Monthly cap", 1500)
 	if err != nil {
 		return err
 	}
@@ -46,7 +46,7 @@ func seedExampleManualPricing(ctx context.Context, repo *storage.Repo) error {
 		}
 	}
 	return repo.UpsertPricing(ctx, storage.Pricing{
-		Model:                "claude-custom-example",
+		Model:                "claude-custom",
 		InputPerMTokUSD:      3,
 		OutputPerMTokUSD:     15,
 		CacheWritePerMTokUSD: 3.75,

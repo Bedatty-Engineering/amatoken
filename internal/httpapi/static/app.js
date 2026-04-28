@@ -1,7 +1,12 @@
 function amatoken() {
   return {
     tab: 'dashboard',
-    filters: { range: 'all', from: '', to: '', project: '', model: '', search: '' },
+    // Per-tab filters: Dashboard and Sessions keep independent state so
+    // changing one never affects the other.
+    filters: {
+      dashboard: { range: 'all', from: '', to: '', project: '', model: '' },
+      sessions:  { range: 'all', from: '', to: '', project: '', model: '', search: '' },
+    },
     options: { projects: [], models: [] },
     summary: {},
     series: [],
@@ -23,9 +28,12 @@ function amatoken() {
     drilldown: { open: false, loading: false, records: [], session: null },
     metricDetail: { open: false, title: '', subtitle: '', firstHeader: '', rows: [] },
     confirmModal: { open: false, title: '', message: '', confirmLabel: 'Delete', onConfirm: null },
-    autoRefresh: false,
+    autoRefresh: true,
     autoSync: true,
     autoRefreshTimer: null,
+    showResources: true,
+    res: { goroutines: 0, memoryMB: 0, cpuPct: 0, memPct: 0, hostCPU: 0, hostMemMB: 0 },
+    memUnit: 'pct',  // 'pct' | 'mb' — toggle for memory display in the header
     metricCards: [
       { key: 'cost_usd',              label: 'Cost (USD)',    field: 'cost_usd',              formatted: v => (v ?? 0).toLocaleString('en-US', { style:'currency', currency:'USD', minimumFractionDigits:2, maximumFractionDigits:2 }) },
       { key: 'sessions',              label: 'Sessions',      field: 'sessions',              formatted: v => (v ?? 0).toLocaleString() },
@@ -44,6 +52,7 @@ function amatoken() {
       await this.loadAutomationSettings();
       await this.reload();
       await this.loadPricing();
+      this.pollResources();
     },
 
     askConfirm(title, message, onConfirm, confirmLabel = 'Delete') {
@@ -60,8 +69,8 @@ function amatoken() {
 
     async loadAutomationSettings() {
       const settings = await fetch('/api/settings').then(r=>r.json()).catch(() => ({}));
-      this.autoRefresh = settings.auto_refresh_enabled === 'true';
       // Default to true unless explicitly disabled.
+      this.autoRefresh = settings.auto_refresh_enabled !== 'false';
       this.autoSync = settings.pricing_auto_sync !== 'false';
       this.applyAutoRefresh();
     },
@@ -88,6 +97,30 @@ function amatoken() {
       });
     },
 
+    fmtBytes(n) {
+      if (!n) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      let u = 0, v = n;
+      while (v >= 1024 && u < units.length - 1) { v /= 1024; u++; }
+      return v.toFixed(u === 0 ? 0 : 1) + ' ' + units[u];
+    },
+
+    async pollResources() {
+      try {
+        const r = await fetch('/api/resources').then(rex => rex.json()).catch(() => null);
+        if (r) {
+          this.res.goroutines = r.goroutines || 0;
+          this.res.memoryMB   = r.memoryMB   || 0;
+          this.res.memPct     = r.memory_pct_host || 0;
+          this.res.cpuPct     = r.cpu_pct_host    || 0;
+          this.res.hostMemMB  = r.host_memory_total_mb || 0;
+          this.res.hostCPU    = r.host_cpu_count || 0;
+        }
+      } catch (_) {}
+      setTimeout(() => this.pollResources(), 3000);
+    },
+    toggleMemUnit() { this.memUnit = this.memUnit === 'pct' ? 'mb' : 'pct'; },
+
     hasBranch(b) {
       // Empty string and "HEAD" (detached HEAD on a checked-out commit) both
       // indicate no real branch context worth showing.
@@ -107,17 +140,21 @@ function amatoken() {
     },
     goHome() {
       this.tab = 'dashboard';
-      this.filters = { range: 'all', from: '', to: '', project: '', model: '' };
+      this.filters.dashboard = { range: 'all', from: '', to: '', project: '', model: '' };
       this.page = 1;
       this.reload();
     },
+
+    // Helper: returns the filter object for a given tab. Defaults to dashboard
+    // when called from non-dashboard/sessions contexts (e.g. modals).
+    f(tab) { return this.filters[tab] || this.filters.dashboard; },
 
     // For most filters: previous window of identical length immediately
     // before. For "All time": fall back to comparing this calendar month
     // against the previous calendar month — gives a meaningful delta even
     // when no period is selected.
     prevRangeBounds() {
-      const cur = this.rangeBounds();
+      const cur = this.rangeBounds('dashboard');
       const fromStr = cur.from;
       if (!fromStr) {
         const now = new Date();
@@ -141,43 +178,52 @@ function amatoken() {
         label: `vs previous ${days <= 1 ? '24 hours' : days + ' days'}`,
       };
     },
-    rangeBounds() {
+    rangeBounds(scope = 'dashboard') {
+      const f = this.f(scope);
       const now = new Date();
       const iso = d => d.toISOString();
-      switch (this.filters.range) {
+      switch (f.range) {
         case '24h':    return { from: iso(new Date(now.getTime() - 24*3600*1000)) };
         case '7d':     return { from: iso(new Date(now.getTime() - 7*24*3600*1000)) };
         case '30d':    return { from: iso(new Date(now.getTime() - 30*24*3600*1000)) };
         case 'month':  return { from: iso(new Date(now.getFullYear(), now.getMonth(), 1)) };
         case 'custom': {
           const out = {};
-          if (this.filters.from) out.from = this.filters.from;
-          if (this.filters.to)   out.to   = this.filters.to;
+          if (f.from) out.from = f.from;
+          if (f.to)   out.to   = f.to;
           return out;
         }
         case 'all':
         default:       return {};
       }
     },
-    // hour bucket only for the 24h preset; everything else uses daily.
-    chartBucket() { return this.filters.range === '24h' ? 'hour' : 'day'; },
+    // Hour bucket only for the 24h preset on the dashboard; everything else uses daily.
+    chartBucket() { return this.filters.dashboard.range === '24h' ? 'hour' : 'day'; },
+    // qs() always uses the DASHBOARD filters — dashboard widgets (summary,
+    // chart, rankings, comparison) show dashboard's view independently of
+    // whatever the user is doing in the Sessions tab.
     qs() {
-      // Note: free-text search is intentionally excluded — it is a
-      // sessions-tab-only filter and must not influence dashboard totals,
-      // chart, rankings, or comparison numbers.
+      const f = this.filters.dashboard;
       const p = new URLSearchParams();
-      const b = this.rangeBounds();
+      const b = this.rangeBounds('dashboard');
       if (b.from) p.set('from', b.from);
       if (b.to)   p.set('to',   b.to);
-      if (this.filters.project) p.set('project', this.filters.project);
-      if (this.filters.model)   p.set('model',   this.filters.model);
+      if (f.project) p.set('project', f.project);
+      if (f.model)   p.set('model',   f.model);
       return p.toString();
     },
+    // sessionsQS() always uses the SESSIONS filters — independent of the
+    // dashboard. Includes the free-text search.
     sessionsQS() {
-      // Sessions endpoint adds the search filter on top of the shared filters.
-      const p = this.qs();
-      if (!this.filters.search) return p;
-      return (p ? p + '&' : '') + 'q=' + encodeURIComponent(this.filters.search);
+      const f = this.filters.sessions;
+      const p = new URLSearchParams();
+      const b = this.rangeBounds('sessions');
+      if (b.from) p.set('from', b.from);
+      if (b.to)   p.set('to',   b.to);
+      if (f.project) p.set('project', f.project);
+      if (f.model)   p.set('model',   f.model);
+      if (f.search)  p.set('q',       f.search);
+      return p.toString();
     },
     searchChanged() {
       this.page = 1; // search shrinks the result set; jump back to page 1.
@@ -256,13 +302,16 @@ function amatoken() {
     },
 
     async loadComparison() {
+      // Comparison cards live on the dashboard — always built from the
+      // dashboard filter context.
+      const dash = this.filters.dashboard;
       const prev = this.prevRangeBounds();
       if (!prev) { this.comparison = null; this.comparisonLabel = ''; return; }
       const p = new URLSearchParams();
       p.set('from', prev.from);
       p.set('to',   prev.to);
-      if (this.filters.project) p.set('project', this.filters.project);
-      if (this.filters.model)   p.set('model',   this.filters.model);
+      if (dash.project) p.set('project', dash.project);
+      if (dash.model)   p.set('model',   dash.model);
 
       // For "All time" we compare current calendar month vs previous month, so
       // the "current" side is also a fixed window — not the unbounded summary
@@ -272,8 +321,8 @@ function amatoken() {
       if (prev.curFrom) {
         const cp = new URLSearchParams();
         cp.set('from', prev.curFrom);
-        if (this.filters.project) cp.set('project', this.filters.project);
-        if (this.filters.model)   cp.set('model',   this.filters.model);
+        if (dash.project) cp.set('project', dash.project);
+        if (dash.model)   cp.set('model',   dash.model);
         curRequests.push(fetch(`/api/summary?${cp.toString()}`).then(r=>r.json()).catch(() => null));
       }
       const [prevSum, curSum] = await Promise.all(curRequests);
@@ -373,12 +422,16 @@ function amatoken() {
     filterByProject(slug) {
       // Toggle: clicking the same project again clears the filter, so the
       // ranking row also acts as a "deselect" without leaving the dashboard.
-      this.filters.project = this.filters.project === slug ? '' : slug;
+      // Rankings live on the dashboard — clicking a row toggles the
+      // dashboard's project filter, never touches Sessions filters.
+      const f = this.filters.dashboard;
+      f.project = f.project === slug ? '' : slug;
       this.page = 1;
       this.reload();
     },
     filterByModel(model) {
-      this.filters.model = this.filters.model === model ? '' : model;
+      const f = this.filters.dashboard;
+      f.model = f.model === model ? '' : model;
       this.page = 1;
       this.reload();
     },
@@ -435,8 +488,9 @@ function amatoken() {
       const qs = new URLSearchParams();
       qs.set('from', start.toISOString());
       qs.set('to',   end.toISOString());
-      if (this.filters.project) qs.set('project', this.filters.project);
-      if (this.filters.model)   qs.set('model',   this.filters.model);
+      const dash = this.filters.dashboard;
+      if (dash.project) qs.set('project', dash.project);
+      if (dash.model)   qs.set('model',   dash.model);
 
       const sum = await fetch(`/api/summary?${qs.toString()}`).then(r => r.json()).catch(() => null);
       const models = sum?.models || [];
@@ -507,6 +561,7 @@ function amatoken() {
       const fmtUSD = v => (v ?? 0).toLocaleString('en-US', { style:'currency', currency:'USD', minimumFractionDigits:2, maximumFractionDigits:2 });
 
       const self = this;
+      const showAll = this.series.length <= 60;
       const opts = {
         responsive: true, maintainAspectRatio: false,
         animation: false,
@@ -519,7 +574,7 @@ function amatoken() {
           self.openBucketDetail(elements[0].index);
         },
         scales: {
-          x: { stacked: true, ticks:{ color:'#8b949e' }, grid:{ color:'#21262d' } },
+          x: { stacked: true, ticks:{ color:'#8b949e', autoSkip:true, maxTicksLimit: showAll ? 0 : 24 }, grid:{ color:'#21262d' } },
           y: { stacked: true, ticks:{ color:'#8b949e', callback: v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(1)+'k' : v }, grid:{ color:'#21262d' } },
         },
         plugins: {
@@ -578,6 +633,22 @@ function amatoken() {
       this.chart = new Chart(ctx, { type: 'bar', data, options: opts });
     },
 
+    // Pricing rows ordered most-expensive first. Output rate is the
+    // primary key (it's the cost driver — ~5× input), with input rate as
+    // tiebreaker so models with the same output but different input still
+    // get a stable order. Returns a shallow copy so Save state references
+    // (the live `pricing` array) aren't disturbed.
+    sortedPricing() {
+      return [...(this.pricing || [])].sort((a, b) => {
+        const ao = a.output_per_mtok_usd ?? 0;
+        const bo = b.output_per_mtok_usd ?? 0;
+        if (bo !== ao) return bo - ao;
+        const ai = a.input_per_mtok_usd ?? 0;
+        const bi = b.input_per_mtok_usd ?? 0;
+        return bi - ai;
+      });
+    },
+
     async loadPricing() {
       const [rates, status] = await Promise.all([
         fetch('/api/pricing').then(r=>r.json()),
@@ -620,10 +691,17 @@ function amatoken() {
       }
     },
     async savePricing(p) {
+      // PUT is the in-place edit path — server preserves source so a tweaked
+      // openrouter row still gets refreshed by the next sync; manual rows
+      // stay manual.
       p._saving = true; p._saveState = null;
       let ok = false;
       try {
-        const r = await fetch('/api/pricing', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(p) });
+        const r = await fetch(`/api/pricing/${encodeURIComponent(p.model)}`, {
+          method:'PUT',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(p),
+        });
         ok = r.ok;
       } catch (_) { ok = false; }
       finally {
@@ -639,18 +717,57 @@ function amatoken() {
       }
     },
     async addPricing() {
-      if (!this.newPricing.model) return;
-      await this.savePricing(this.newPricing);
+      const np = this.newPricing;
+      const id = (np.model || '').trim();
+      if (!id) return;
+
+      // Client-side guard: catch obvious duplicates before hitting the server.
+      // The server enforces the same rule (returns 409) — this is defense in
+      // depth and gives the user a styled modal instead of a thrown fetch.
+      const dup = (this.pricing || []).find(p => p.model === id);
+      if (dup) {
+        this.askConfirm(
+          'Model already exists',
+          `A pricing row for "${id}" already exists (source: ${dup.source}). Edit that row directly instead of creating a duplicate.`,
+          () => {},
+          'OK',
+        );
+        return;
+      }
+
+      const payload = { ...np, model: id };
+      const r = await fetch('/api/pricing', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(payload),
+      });
+      if (r.status === 409) {
+        // Race or stale UI: model was created elsewhere between page load and now.
+        this.askConfirm('Model already exists',
+          await r.text() || `A pricing row for "${id}" already exists.`,
+          () => {}, 'OK');
+        await this.loadPricing();
+        return;
+      }
+      if (!r.ok) {
+        this.askConfirm('Could not save', await r.text() || 'Server rejected the request.',
+          () => {}, 'OK');
+        return;
+      }
       this.newPricing = { model: '', input_per_mtok_usd: 0, output_per_mtok_usd: 0, cache_write_per_mtok_usd: 0, cache_read_per_mtok_usd: 0 };
       await this.loadPricing();
+      await this.reload();
     },
-    deletePricing(p, i) {
+    deletePricing(p) {
       this.askConfirm(
         'Delete pricing?',
         `Remove pricing for "${p.model}". If this row was managed by OpenRouter it will reappear on the next sync — manual rows are gone for good.`,
         async () => {
           await fetch(`/api/pricing/${encodeURIComponent(p.model)}`, { method:'DELETE' });
-          this.pricing.splice(i, 1);
+          // Sort returns a shallow copy, so the row's index in the visible
+          // table (`i` from x-for) doesn't match `this.pricing`. Find by id.
+          const idx = this.pricing.findIndex(x => x.model === p.model);
+          if (idx >= 0) this.pricing.splice(idx, 1);
           await this.reload();
         },
       );

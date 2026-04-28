@@ -17,23 +17,56 @@ func (s *Server) handleListPricing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, rates)
 }
 
-func (s *Server) handleUpsertPricing(w http.ResponseWriter, r *http.Request) {
+// handleCreatePricing handles POST /api/pricing — strict create. Rejects with
+// 409 Conflict if a row for the same model already exists (whether manual,
+// openrouter or seed). Use PUT for in-place edits.
+func (s *Server) handleCreatePricing(w http.ResponseWriter, r *http.Request) {
 	var p storage.Pricing
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		http.Error(w, "bad json", 400)
 		return
 	}
-	if m := chi.URLParam(r, "model"); m != "" && p.Model == "" {
-		p.Model = m
+	if p.Model == "" {
+		http.Error(w, "model required", 400)
+		return
+	}
+	existing, err := s.Repo.ListPricing(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	for _, e := range existing {
+		if e.Model == p.Model {
+			http.Error(w, "pricing for model "+p.Model+" already exists; edit it instead", http.StatusConflict)
+			return
+		}
+	}
+	p.Source = "manual"
+	p.FetchedAt = nil
+	if err := s.Repo.UpsertPricing(r.Context(), p); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, 201, p)
+}
+
+// handleUpdatePricing handles PUT /api/pricing/{model} — in-place edit of an
+// existing row. Preserves the existing source so openrouter rows you tune
+// still get refreshed by the next sync; only rows that were "manual" stay
+// fully under user control.
+func (s *Server) handleUpdatePricing(w http.ResponseWriter, r *http.Request) {
+	var p storage.Pricing
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		http.Error(w, "bad json", 400)
+		return
+	}
+	if m := chi.URLParam(r, "model"); m != "" {
+		p.Model = m // URL is authoritative for which row is being edited
 	}
 	if p.Model == "" {
 		http.Error(w, "model required", 400)
 		return
 	}
-	// Source preservation: editing an existing row does not change its source.
-	// A row keeps "openrouter" so the next sync overwrites it with fresh
-	// upstream values; only rows born from an UI add (no prior row) become
-	// "manual" and stay protected from sync.
 	existing, err := s.Repo.ListPricing(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -46,11 +79,11 @@ func (s *Server) handleUpsertPricing(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	if existingSource != "" {
-		p.Source = existingSource
-	} else {
-		p.Source = "manual"
+	if existingSource == "" {
+		http.Error(w, "no pricing row for "+p.Model, http.StatusNotFound)
+		return
 	}
+	p.Source = existingSource
 	p.FetchedAt = nil
 	if err := s.Repo.UpsertPricing(r.Context(), p); err != nil {
 		http.Error(w, err.Error(), 500)
