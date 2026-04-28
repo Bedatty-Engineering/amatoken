@@ -1,0 +1,22 @@
+# Build & local state
+*.db
+*.db-shm
+*.db-wal
+/data/
+/dist/
+/bin/
+# Compiled binary at the repo root only — assets/img/* are intentionally tracked.
+/amatoken
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Local override files
+.env
+.env.local
+*.local

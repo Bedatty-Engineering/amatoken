@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>amatoken — Claude usage</title>
+<link rel="icon" type="image/png" href="/logo.png" />
+<link rel="stylesheet" href="/styles.css" />
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="/app.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+</head>
+<body x-data="amatoken()" x-init="init()">
+  <div class="page-wrap">
+  <header>
+    <a class="brand" href="#" @click.prevent="goHome()" title="Home">
+      <img src="/logo.png" alt="amatoken" class="logo"/>
+      <h1>amatoken</h1>
+    </a>
+    <nav>
+      <button :class="tab==='dashboard' && 'active'" @click="tab='dashboard'">Dashboard</button>
+      <button :class="tab==='sessions' && 'active'" @click="tab='sessions'">Sessions</button>
+      <button :class="tab==='budgets' && 'active'" @click="tab='budgets'">Budgets</button>
+      <button :class="tab==='pricing' && 'active'" @click="tab='pricing'">Pricing</button>
+      <span class="action-group">
+        <button class="ghost" @click="refresh()" :disabled="refreshing">Refresh now</button>
+        <span class="action-feedback">
+          <span x-show="refreshing" class="spinner"></span>
+          <span x-show="!refreshing && refreshState==='success'" class="status-icon ok">✓</span>
+          <span x-show="!refreshing && refreshState==='error'" class="status-icon err">✗</span>
+        </span>
+      </span>
+      <label class="toggle" title="Re-ingest every 60s automatically">
+        <input type="checkbox" x-model="autoRefresh" @change="toggleAutoRefresh()"/>
+        <span>Auto-refresh</span>
+      </label>
+    </nav>
+  </header>
+
+  <div class="budget-bar" x-show="dashboardBudgets().length > 0 && tab==='dashboard'">
+    <template x-for="b in dashboardBudgets()" :key="b.id">
+      <div class="budget-bar-inner">
+        <span class="budget-label" x-text="`${b.name}: ${fmtUSD(b.amount_usd)}`"></span>
+        <div class="budget-track">
+          <div class="budget-fill" :class="budgetClass(b.pct_used)" :style="`width: ${Math.min(100, b.pct_used).toFixed(1)}%`"></div>
+        </div>
+        <span class="budget-meta" x-text="`${fmtUSD(b.spent_usd)} (${b.pct_used.toFixed(1)}%) this month`"></span>
+      </div>
+    </template>
+  </div>
+
+  <section class="filters" x-show="tab==='dashboard' || tab==='sessions'">
+    <label>Period
+      <select x-model="filters.range" @change="reload()">
+        <option value="all">All time</option>
+        <option value="24h">Last 24 hours</option>
+        <option value="7d">Last 7 days</option>
+        <option value="30d">Last 30 days</option>
+        <option value="month">This month</option>
+        <option value="custom">Custom…</option>
+      </select>
+    </label>
+    <template x-if="filters.range==='custom'">
+      <span class="custom-range">
+        <label>From <input type="date" x-model="filters.from" @change="reload()"/></label>
+        <label>To <input type="date" x-model="filters.to" @change="reload()"/></label>
+      </span>
+    </template>
+    <label>Project
+      <select x-model="filters.project" @change="reload()">
+        <option value="">All projects</option>
+        <template x-for="p in options.projects" :key="p"><option :value="p" x-text="formatPath(p)"></option></template>
+      </select>
+    </label>
+    <label>Model
+      <select x-model="filters.model" @change="reload()">
+        <option value="">All models</option>
+        <template x-for="m in options.models" :key="m"><option :value="m" x-text="m"></option></template>
+      </select>
+    </label>
+  </section>
+
+  <main x-show="tab==='dashboard'">
+    <p class="comparison-label" x-show="comparison" x-text="comparisonLabel"></p>
+    <div class="cards">
+      <template x-for="m in metricCards" :key="m.key">
+        <div class="card clickable" @click="openMetricDetail(m.key)" :title="`Click for ${m.label} breakdown`">
+          <span x-text="m.label"></span>
+          <strong x-text="m.formatted(summary.summary?.[m.field] ?? 0)"></strong>
+          <small class="delta" x-show="comparison" :class="deltaClass(comparison?.[m.field])" x-text="deltaText(comparison?.[m.field])"></small>
+        </div>
+      </template>
+    </div>
+
+    <div class="chart-wrap"><canvas id="ts-chart"></canvas></div>
+
+    <div class="rankings-grid">
+      <section>
+        <h2>Top projects by spend</h2>
+        <table class="data compact">
+          <thead><tr><th>#</th><th>Project</th><th>Sessions</th><th>Cost</th></tr></thead>
+          <tbody>
+            <template x-for="(p, i) in (rankings.projects || []).slice(0, 15)" :key="p.project_slug">
+              <tr class="clickable" :class="filters.project === p.project_slug && 'selected'" @click="filterByProject(p.project_slug)" :title="filters.project === p.project_slug ? 'Click to clear filter' : `Filter by ${formatPath(p.cwd || p.project_slug)}`">
+                <td x-text="i + 1"></td>
+                <td class="ellipsis" x-text="formatPath(p.cwd || p.project_slug)"></td>
+                <td x-text="p.sessions.toLocaleString()"></td>
+                <td x-text="fmtUSD(p.cost_usd)"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Top models by spend</h2>
+        <table class="data compact">
+          <thead><tr><th>#</th><th>Model</th><th>Messages</th><th>Cost</th></tr></thead>
+          <tbody>
+            <template x-for="(m, i) in (rankings.models || []).slice(0, 15)" :key="m.model">
+              <tr class="clickable" :class="filters.model === m.model && 'selected'" @click="filterByModel(m.model)" :title="filters.model === m.model ? 'Click to clear filter' : `Filter by ${m.model}`">
+                <td x-text="i + 1"></td>
+                <td x-text="m.model"></td>
+                <td x-text="m.messages.toLocaleString()"></td>
+                <td x-text="fmtUSD(m.cost_usd)"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </section>
+    </div>
+  </main>
+
+  <main x-show="tab==='sessions'">
+    <div class="toolbar">
+      <span class="search-input">
+        <input type="search" placeholder="Search project, branch, model, session id…" x-model="filters.search" @input.debounce.300ms="searchChanged()"/>
+        <button class="ghost" x-show="filters.search" @click="filters.search=''; searchChanged()" title="Clear">✕</button>
+      </span>
+      <span class="status" x-show="total > 0" x-text="`${total.toLocaleString()} ${total === 1 ? 'session' : 'sessions'} match`"></span>
+    </div>
+    <table class="data">
+      <thead><tr><th>Last activity</th><th>Project</th><th>Branch</th><th>Model(s)</th><th>Messages</th><th>Input</th><th>Output</th><th>Cache R/W</th><th>Cost</th></tr></thead>
+      <tbody>
+        <template x-for="s in sessions" :key="s.session_id">
+          <tr class="clickable" @click="openDrilldown(s)" :title="`${formatPath(s.cwd || s.project_slug)} — click for details`">
+            <td x-text="new Date(s.last_seen).toLocaleString()"></td>
+            <td class="ellipsis-row" x-text="formatPath(s.cwd || s.project_slug)"></td>
+            <td>
+              <span x-show="hasBranch(s.git_branch)" x-text="s.git_branch"></span>
+              <span x-show="!hasBranch(s.git_branch)" class="null">— no branch —</span>
+            </td>
+            <td x-text="s.models"></td>
+            <td x-text="s.messages.toLocaleString()"></td>
+            <td x-text="s.input_tokens.toLocaleString()"></td>
+            <td x-text="s.output_tokens.toLocaleString()"></td>
+            <td x-text="(s.cache_read_tokens + s.cache_creation_tokens).toLocaleString()"></td>
+            <td x-text="fmtUSD(s.cost_usd)"></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+    <div class="pager">
+      <button :disabled="page<=1" @click="goPage(1)" title="First">«</button>
+      <button :disabled="page<=1" @click="goPage(page-1)" title="Previous">‹</button>
+      <template x-for="n in pageWindow()" :key="n">
+        <button :class="n===page && 'active'" @click="goPage(n)" x-text="n"></button>
+      </template>
+      <button :disabled="page>=pages" @click="goPage(page+1)" title="Next">›</button>
+      <button :disabled="page>=pages" @click="goPage(pages)" title="Last">»</button>
+      <span class="meta" x-text="`Page ${page} of ${pages} · ${total.toLocaleString()} sessions`"></span>
+    </div>
+  </main>
+
+  <main x-show="tab==='budgets'">
+    <h2>Monthly budgets</h2>
+    <p class="hint">Each budget tracks the current calendar month spend (all projects, all models). Tick <strong>Show on dashboard</strong> to display its progress bar in the dashboard banner.</p>
+    <table class="data">
+      <thead><tr><th>Name</th><th>Cap (USD)</th><th>Spent this month</th><th>Used</th><th>Progress</th><th>Show on dashboard</th><th>Actions</th></tr></thead>
+      <tbody>
+        <template x-for="(b, i) in budgets" :key="b.id">
+          <tr>
+            <td><input x-model="b.name"/></td>
+            <td><span class="currency-input"><input type="number" min="1" step="1" x-model.number="b.amount_usd"/></span></td>
+            <td x-text="fmtUSD(b.spent_usd)"></td>
+            <td x-text="b.pct_used.toFixed(1) + '%'" :class="b.pct_used >= 100 ? 'over-text' : (b.pct_used >= 80 ? 'warn-text' : '')"></td>
+            <td>
+              <div class="budget-track inline">
+                <div class="budget-fill" :class="budgetClass(b.pct_used)" :style="`width: ${Math.min(100, b.pct_used).toFixed(1)}%`"></div>
+              </div>
+            </td>
+            <td class="center"><input type="checkbox" x-model="b.show_in_dashboard" @change="saveBudget(b)"/></td>
+            <td class="actions">
+              <span class="action-group">
+                <button @click="saveBudget(b)" :disabled="b._saving">
+                  <span x-show="!b._saving">Save</span>
+                  <span x-show="b._saving">Saving…</span>
+                </button>
+                <span class="action-feedback">
+                  <span x-show="b._saving" class="spinner"></span>
+                  <span x-show="!b._saving && b._saveState==='success'" class="status-icon ok">✓</span>
+                  <span x-show="!b._saving && b._saveState==='error'" class="status-icon err">✗</span>
+                </span>
+              </span>
+              <button class="danger" @click="deleteBudget(b, i)">Delete</button>
+            </td>
+          </tr>
+        </template>
+        <tr>
+          <td><input placeholder="e.g. soft cap" x-model="newBudget.name"/></td>
+          <td><span class="currency-input"><input type="number" min="1" step="1" x-model.number="newBudget.amount_usd"/></span></td>
+          <td colspan="4" class="hint">— add to start tracking —</td>
+          <td><button @click="addBudget()">Add</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </main>
+
+  <main x-show="tab==='pricing'">
+    <div class="toolbar">
+      <span class="action-group">
+        <button @click="syncPricing()" :disabled="syncing">Sync from OpenRouter</button>
+        <span class="action-feedback">
+          <span x-show="syncing" class="spinner"></span>
+          <span x-show="!syncing && syncState==='success'" class="status-icon ok">✓</span>
+          <span x-show="!syncing && syncState==='error'" class="status-icon err">✗</span>
+        </span>
+      </span>
+      <label class="toggle" title="Run sync automatically every 12h">
+        <input type="checkbox" x-model="autoSync" @change="toggleAutoSync()"/>
+        <span>Auto-sync</span>
+      </label>
+      <span class="status" x-text="pricingStatusText()"></span>
+    </div>
+    <p class="hint">Prices in USD per 1M tokens. Manual rows are <em>never</em> overwritten by sync — edit a row to lock it.</p>
+    <table class="data">
+      <thead><tr><th>Model</th><th>Source</th><th>Updated</th><th>Input</th><th>Output</th><th>Cache write</th><th>Cache read</th><th></th></tr></thead>
+      <tbody>
+        <template x-for="(p, i) in pricing" :key="p.model">
+          <tr>
+            <td x-text="p.model"></td>
+            <td><span class="source-badge" :class="p.source" x-text="p.source"></span></td>
+            <td x-text="(p.fetched_at || p.updated_at) ? new Date(p.fetched_at || p.updated_at).toLocaleString() : '—'"></td>
+            <td><span class="currency-input"><input type="number" step="0.001" x-model.number="p.input_per_mtok_usd"/></span></td>
+            <td><span class="currency-input"><input type="number" step="0.001" x-model.number="p.output_per_mtok_usd"/></span></td>
+            <td><span class="currency-input"><input type="number" step="0.001" x-model.number="p.cache_write_per_mtok_usd"/></span></td>
+            <td><span class="currency-input"><input type="number" step="0.001" x-model.number="p.cache_read_per_mtok_usd"/></span></td>
+            <td class="actions">
+              <span class="action-group">
+                <button @click="savePricing(p)" :disabled="p._saving">
+                  <span x-show="!p._saving">Save</span>
+                  <span x-show="p._saving">Saving…</span>
+                </button>
+                <span class="action-feedback">
+                  <span x-show="p._saving" class="spinner"></span>
+                  <span x-show="!p._saving && p._saveState==='success'" class="status-icon ok">✓</span>
+                  <span x-show="!p._saving && p._saveState==='error'" class="status-icon err">✗</span>
+                </span>
+              </span>
+              <button class="danger" @click="deletePricing(p, i)">Delete</button>
+            </td>
+          </tr>
+        </template>
+        <tr>
+          <td><input placeholder="claude-..." x-model="newPricing.model"/></td>
+          <td colspan="2" class="hint">manual (new)</td>
+          <td><span class="currency-input"><input type="number" step="0.001" x-model.number="newPricing.input_per_mtok_usd"/></span></td>
+          <td><span class="currency-input"><input type="number" step="0.001" x-model.number="newPricing.output_per_mtok_usd"/></span></td>
+          <td><span class="currency-input"><input type="number" step="0.001" x-model.number="newPricing.cache_write_per_mtok_usd"/></span></td>
+          <td><span class="currency-input"><input type="number" step="0.001" x-model.number="newPricing.cache_read_per_mtok_usd"/></span></td>
+          <td><button @click="addPricing()">Add</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </main>
+
+  <div class="modal-backdrop" x-show="drilldown.open" @click.self="closeDrilldown()" x-cloak>
+    <div class="modal">
+      <header class="modal-header">
+        <div>
+          <h3 x-text="drilldown.session ? formatPath(drilldown.session.cwd || drilldown.session.project_slug) : ''"></h3>
+          <p class="modal-sub" x-show="drilldown.session">
+            <span x-text="drilldown.session && hasBranch(drilldown.session.git_branch) ? drilldown.session.git_branch : '— no branch —'"></span>
+            <span class="dot">·</span>
+            <span x-text="drilldown.session && drilldown.session.models"></span>
+            <span class="dot">·</span>
+            <span x-text="drilldown.session && drilldown.session.messages.toLocaleString() + ' messages'"></span>
+            <span class="dot">·</span>
+            <strong x-text="drilldown.session && fmtUSD(drilldown.session.cost_usd)"></strong>
+          </p>
+        </div>
+        <button class="ghost" @click="closeDrilldown()">Close</button>
+      </header>
+      <div class="modal-body">
+        <p x-show="drilldown.loading" class="hint">Loading…</p>
+        <table class="data compact" x-show="!drilldown.loading">
+          <thead><tr><th>Time</th><th>Model</th><th>Branch</th><th>Input</th><th>Output</th><th>Cache R/W</th><th>Cost</th></tr></thead>
+          <tbody>
+            <template x-for="r in drilldown.records" :key="r.id">
+              <tr>
+                <td x-text="new Date(r.ts).toLocaleString()"></td>
+                <td x-text="r.model"></td>
+                <td>
+                  <span x-show="hasBranch(r.git_branch)" x-text="r.git_branch"></span>
+                  <span x-show="!hasBranch(r.git_branch)" class="null">—</span>
+                </td>
+                <td x-text="r.input_tokens.toLocaleString()"></td>
+                <td x-text="r.output_tokens.toLocaleString()"></td>
+                <td x-text="(r.cache_read_tokens + r.cache_creation_tokens).toLocaleString()"></td>
+                <td x-text="fmtUSD(r.cost_usd)"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" x-show="metricDetail.open" @click.self="closeMetricDetail()" x-cloak>
+    <div class="modal small">
+      <header class="modal-header">
+        <div>
+          <h3 x-text="metricDetail.title"></h3>
+          <p class="modal-sub" x-text="metricDetail.subtitle"></p>
+        </div>
+        <button class="ghost" @click="closeMetricDetail()">Close</button>
+      </header>
+      <div class="modal-body">
+        <table class="data compact">
+          <thead>
+            <tr>
+              <th x-text="metricDetail.firstHeader"></th>
+              <th>Value</th>
+              <th>Share</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="row in metricDetail.rows" :key="row.label">
+              <tr>
+                <td x-text="row.label" class="ellipsis-row"></td>
+                <td x-text="row.formatted"></td>
+                <td>
+                  <div class="share-bar"><div class="share-fill" :style="`width: ${row.pct.toFixed(1)}%`"></div></div>
+                  <span class="share-pct" x-text="row.pct.toFixed(1) + '%'"></span>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" x-show="confirmModal.open" @click.self="confirmNo()" @keydown.escape.window="confirmNo()" x-cloak>
+    <div class="modal small confirm">
+      <header class="modal-header">
+        <h3 x-text="confirmModal.title"></h3>
+      </header>
+      <div class="modal-body">
+        <p x-text="confirmModal.message"></p>
+        <div class="confirm-actions">
+          <button class="ghost" @click="confirmNo()">Cancel</button>
+          <button :class="confirmModal.confirmLabel === 'Delete' ? 'danger' : ''" @click="confirmYes()" x-text="confirmModal.confirmLabel"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <span>© 2026 amatoken — All rights reserved.</span>
+    <span class="dot">·</span>
+    <span>Self-hosted Claude usage monitor</span>
+  </footer>
+  </div>
+</body>
+</html>
