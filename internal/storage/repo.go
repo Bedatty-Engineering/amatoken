@@ -105,17 +105,15 @@ type Filters struct {
 }
 
 func (f Filters) where() (string, []any) {
-	// Synthetic messages are Claude Code internal events (context compaction
-	// etc.) with no real cost — always excluded.
 	q := " WHERE model != '<synthetic>'"
 	var args []any
 	if f.From != nil {
 		q += " AND ts >= ?"
-		args = append(args, f.From.UTC().Format(time.RFC3339Nano))
+		args = append(args, f.From.Format("2006-01-02"))
 	}
 	if f.To != nil {
-		q += " AND ts < ?"
-		args = append(args, f.To.UTC().Format(time.RFC3339Nano))
+		q += " AND ts <= ?"
+		args = append(args, f.To.Format("2006-01-02"))
 	}
 	if f.Project != "" {
 		q += " AND " + projectKeyExpr + " = ?"

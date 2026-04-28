@@ -22,19 +22,75 @@
       <button :class="tab==='sessions' && 'active'" @click="tab='sessions'">Sessions</button>
       <button :class="tab==='budgets' && 'active'" @click="tab='budgets'">Budgets</button>
       <button :class="tab==='pricing' && 'active'" @click="tab='pricing'">Pricing</button>
-      <span class="action-group">
+      <span class="action-group has-tooltip">
         <button class="ghost" @click="refresh()" :disabled="refreshing">Refresh now</button>
         <span class="action-feedback">
           <span x-show="refreshing" class="spinner"></span>
           <span x-show="!refreshing && refreshState==='success'" class="status-icon ok">✓</span>
           <span x-show="!refreshing && refreshState==='error'" class="status-icon err">✗</span>
         </span>
+        <label class="toggle">
+          <input type="checkbox" x-model="autoRefresh" @change="toggleAutoRefresh()"/>
+          <span>Auto-refresh</span>
+        </label>
+        <div class="resource-tooltip nav-tooltip" role="tooltip">
+          <h4>Refresh & Auto-refresh</h4>
+          <dl>
+            <dt>Refresh now</dt>
+            <dd>
+              Triggers an immediate <strong>re-scan</strong> of <code>~/.claude/projects</code>.
+              The watcher already ingests new lines via <code>fsnotify</code>, but if a session
+              was started while the container was off — or fsnotify dropped an event — this
+              forces a full reconcile from each file's last byte offset.
+              <span class="ok-line">✓ green</span> after success, <span class="err-line">✗ red</span> on error (auto-clears in ~2.5s).
+            </dd>
+            <dt>Auto-refresh</dt>
+            <dd>
+              When on, the UI polls Refresh every <strong>60s</strong> in the background. Same
+              cadence as the server-side reconcile tick. Off by default — turn on if you keep
+              the dashboard open during long Claude Code sessions and want totals to keep
+              updating without manual clicks. Setting is persisted server-side.
+            </dd>
+          </dl>
+        </div>
       </span>
-      <label class="toggle" title="Re-ingest every 60s automatically">
-        <input type="checkbox" x-model="autoRefresh" @change="toggleAutoRefresh()"/>
-        <span>Auto-refresh</span>
-      </label>
     </nav>
+    <div class="header-resources">
+      <span class="sr-label">CPU:</span>
+      <span class="sr-value" x-text="res.cpuPct.toFixed(1) + '%'"></span>
+      <span class="sr-label">Mem:</span>
+      <span class="sr-value" x-text="memUnit === 'pct' ? res.memPct.toFixed(2) + '%' : res.memoryMB + ' MB'"></span>
+      <button class="sr-toggle" @click="toggleMemUnit()" x-text="memUnit === 'pct' ? '%' : 'MB'"></button>
+      <span class="sr-label">·</span>
+      <span class="sr-label">Goroutines:</span>
+      <span class="sr-value" x-text="res.goroutines"></span>
+
+      <div class="resource-tooltip" role="tooltip">
+        <h4>Container resource usage</h4>
+        <dl>
+          <dt>CPU</dt>
+          <dd>
+            % of <strong>total host CPU</strong> capacity used right now,
+            averaged across <span x-text="res.hostCPU || '?'"></span> cores. Sampled
+            over the last poll interval (~3s).
+          </dd>
+          <dt>Mem</dt>
+          <dd>
+            Container memory (cgroup RSS) as % of host total
+            (<span x-text="res.hostMemMB ? res.hostMemMB.toLocaleString() + ' MB' : '?'"></span>).
+            Click the <code>%</code> / <code>MB</code> button to toggle between
+            relative and absolute display.
+          </dd>
+          <dt>Goroutines</dt>
+          <dd>
+            Go's lightweight concurrency primitive — like threads but ~2 KB each,
+            scheduled by the Go runtime. Reflects active in-flight work
+            (HTTP requests, fsnotify watcher, pricing sync, GC). Stable around
+            10–15 here is healthy; unbounded growth would indicate a leak.
+          </dd>
+        </dl>
+      </div>
+    </div>
   </header>
 
   <div class="budget-bar" x-show="dashboardBudgets().length > 0 && tab==='dashboard'">
@@ -51,7 +107,7 @@
 
   <section class="filters" x-show="tab==='dashboard' || tab==='sessions'">
     <label>Period
-      <select x-model="filters.range" @change="reload()">
+      <select x-model="filters[tab].range" @change="reload()">
         <option value="all">All time</option>
         <option value="24h">Last 24 hours</option>
         <option value="7d">Last 7 days</option>
@@ -60,20 +116,20 @@
         <option value="custom">Custom…</option>
       </select>
     </label>
-    <template x-if="filters.range==='custom'">
+    <template x-if="filters[tab].range==='custom'">
       <span class="custom-range">
-        <label>From <input type="date" x-model="filters.from" @change="reload()"/></label>
-        <label>To <input type="date" x-model="filters.to" @change="reload()"/></label>
+        <label>From <input type="date" x-model="filters[tab].from" @change="reload()"/></label>
+        <label>To <input type="date" x-model="filters[tab].to" @change="reload()"/></label>
       </span>
     </template>
     <label>Project
-      <select x-model="filters.project" @change="reload()">
+      <select x-model="filters[tab].project" @change="reload()">
         <option value="">All projects</option>
         <template x-for="p in options.projects" :key="p"><option :value="p" x-text="formatPath(p)"></option></template>
       </select>
     </label>
     <label>Model
-      <select x-model="filters.model" @change="reload()">
+      <select x-model="filters[tab].model" @change="reload()">
         <option value="">All models</option>
         <template x-for="m in options.models" :key="m"><option :value="m" x-text="m"></option></template>
       </select>
@@ -101,7 +157,7 @@
           <thead><tr><th>#</th><th>Project</th><th>Sessions</th><th>Cost</th></tr></thead>
           <tbody>
             <template x-for="(p, i) in (rankings.projects || []).slice(0, 15)" :key="p.project_slug">
-              <tr class="clickable" :class="filters.project === p.project_slug && 'selected'" @click="filterByProject(p.project_slug)" :title="filters.project === p.project_slug ? 'Click to clear filter' : `Filter by ${formatPath(p.cwd || p.project_slug)}`">
+              <tr class="clickable" :class="filters.dashboard.project === p.project_slug && 'selected'" @click="filterByProject(p.project_slug)" :title="filters.dashboard.project === p.project_slug ? 'Click to clear filter' : `Filter by ${formatPath(p.cwd || p.project_slug)}`">
                 <td x-text="i + 1"></td>
                 <td class="ellipsis" x-text="formatPath(p.cwd || p.project_slug)"></td>
                 <td x-text="p.sessions.toLocaleString()"></td>
@@ -118,7 +174,7 @@
           <thead><tr><th>#</th><th>Model</th><th>Messages</th><th>Cost</th></tr></thead>
           <tbody>
             <template x-for="(m, i) in (rankings.models || []).slice(0, 15)" :key="m.model">
-              <tr class="clickable" :class="filters.model === m.model && 'selected'" @click="filterByModel(m.model)" :title="filters.model === m.model ? 'Click to clear filter' : `Filter by ${m.model}`">
+              <tr class="clickable" :class="filters.dashboard.model === m.model && 'selected'" @click="filterByModel(m.model)" :title="filters.dashboard.model === m.model ? 'Click to clear filter' : `Filter by ${m.model}`">
                 <td x-text="i + 1"></td>
                 <td x-text="m.model"></td>
                 <td x-text="m.messages.toLocaleString()"></td>
@@ -134,8 +190,8 @@
   <main x-show="tab==='sessions'">
     <div class="toolbar">
       <span class="search-input">
-        <input type="search" placeholder="Search project, branch, model, session id…" x-model="filters.search" @input.debounce.300ms="searchChanged()"/>
-        <button class="ghost" x-show="filters.search" @click="filters.search=''; searchChanged()" title="Clear">✕</button>
+        <input type="search" placeholder="Search project, branch, model, session id…" x-model="filters.sessions.search" @input.debounce.300ms="searchChanged()"/>
+        <button class="ghost" x-show="filters.sessions.search" @click="filters.sessions.search=''; searchChanged()" title="Clear">✕</button>
       </span>
       <span class="status" x-show="total > 0" x-text="`${total.toLocaleString()} ${total === 1 ? 'session' : 'sessions'} match`"></span>
     </div>
@@ -232,11 +288,11 @@
       </label>
       <span class="status" x-text="pricingStatusText()"></span>
     </div>
-    <p class="hint">Prices in USD per 1M tokens. Manual rows are <em>never</em> overwritten by sync — edit a row to lock it.</p>
+    <p class="hint">Prices in USD per 1M tokens, ordered <strong>most expensive first</strong> (output rate). Manual rows are <em>never</em> overwritten by sync.</p>
     <table class="data">
       <thead><tr><th>Model</th><th>Source</th><th>Updated</th><th>Input</th><th>Output</th><th>Cache write</th><th>Cache read</th><th></th></tr></thead>
       <tbody>
-        <template x-for="(p, i) in pricing" :key="p.model">
+        <template x-for="(p, i) in sortedPricing()" :key="p.model">
           <tr>
             <td x-text="p.model"></td>
             <td><span class="source-badge" :class="p.source" x-text="p.source"></span></td>
@@ -257,7 +313,7 @@
                   <span x-show="!p._saving && p._saveState==='error'" class="status-icon err">✗</span>
                 </span>
               </span>
-              <button class="danger" @click="deletePricing(p, i)">Delete</button>
+              <button class="danger" @click="deletePricing(p)">Delete</button>
             </td>
           </tr>
         </template>
@@ -292,6 +348,20 @@
         <button class="ghost" @click="closeDrilldown()">Close</button>
       </header>
       <div class="modal-body">
+        <details class="info-panel">
+          <summary>What am I looking at?</summary>
+          <p>One row per <strong>assistant message</strong> in this session — the granular events that Anthropic actually charges for. Synthetic events (context compaction, system prompts) are excluded.</p>
+          <dl class="info-grid">
+            <dt>Time</dt><dd>When the response was generated.</dd>
+            <dt>Model</dt><dd>Which model answered. Can vary mid-session if you used <code>/model</code>.</dd>
+            <dt>Branch</dt><dd>Git branch at that moment. May change if you switched branches mid-session.</dd>
+            <dt>Input</dt><dd>New tokens you sent in this request. Priced at <em>base</em> rate.</dd>
+            <dt>Output</dt><dd>Tokens Claude generated. Priced at ~5× input rate — usually the biggest cost driver.</dd>
+            <dt>Cache R/W</dt><dd>Cache read (cheap, ~10% of input rate) plus cache write (expensive, ~125% of input rate). Lots of cache <strong>writes</strong> = context kept changing.</dd>
+            <dt>Cost</dt><dd>Per-message cost in USD using the active pricing table. Sums up to the session total in the header.</dd>
+          </dl>
+          <p class="hint">Use this to spot which specific messages dominate the bill — a single 5k-output reply on Opus can cost $0.15+ alone. The raw conversation text isn't shown here; that's in the JSONL file on disk.</p>
+        </details>
         <p x-show="drilldown.loading" class="hint">Loading…</p>
         <table class="data compact" x-show="!drilldown.loading">
           <thead><tr><th>Time</th><th>Model</th><th>Branch</th><th>Input</th><th>Output</th><th>Cache R/W</th><th>Cost</th></tr></thead>
@@ -371,6 +441,18 @@
     <span class="dot">·</span>
     <span>Self-hosted Claude usage monitor</span>
   </footer>
+
+  <div class="system-resources" :class="!showResources && 'hidden'">
+    <button class="sr-toggle" @click="showResources = !showResources" x-text="showResources ? 'Hide' : 'Show'"></button>
+    <span class="sr-label">CPU</span>
+    <span class="sr-value" x-text="res.cpuPct + '%'"></span>
+    <div class="sr-bar-wrap"><div class="sr-bar-fill" :style="'width: ' + res.cpuPct + '%'"></div></div>
+    <span class="sr-pct" x-text="'of ' + res.hostCpus + ' cores'"></span>
+    <span class="sr-label">Mem</span>
+    <span class="sr-value" x-text="fmtBytes(res.memUsed)"></span>
+    <div class="sr-bar-wrap"><div class="sr-bar-fill" :style="'width: ' + res.memPct + '%'"></div></div>
+    <span class="sr-pct" x-text="'of ' + fmtBytes(res.memTotal)"></span>
+  </div>
   </div>
 </body>
 </html>

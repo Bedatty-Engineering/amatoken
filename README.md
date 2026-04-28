@@ -13,14 +13,16 @@ upkeep required.
 
 ## Highlights
 
-- **Dashboard** with cost / sessions / messages / tokens cards, all with **period-over-period delta** (▲ red / ▼ green) — works even on `All time` (falls back to month-over-month).
+- **Dashboard** with cost / sessions / messages / tokens cards, all with **period-over-period delta** (▲ red / ▼ green) — works even on `All time` (falls back to month-over-month). Cards are clickable → modal with per-model or per-project breakdown.
 - **Stacked daily/hourly chart** with rich hover tooltips (per-bucket cost, token breakdown, share of period). Bars are clickable → modal with per-model breakdown for that day/hour.
-- **Top 15 projects** and **top 15 models by spend**, ranked side-by-side on the dashboard. Clicking a row applies the filter without leaving the page.
-- **Sessions tab** — paginated table with free-text search across project, branch, model, session id; click any row for a **drill-down modal** showing every assistant message with its individual cost.
-- **Multiple named budgets** (calendar-month). Up to 5 can be pinned to the dashboard banner. Per-row Save/Delete with inline ✓ / ✗ feedback.
-- **OpenRouter pricing engine** — Anthropic-only models, periodic auto-sync (toggleable) + manual sync from UI. Manual edits to a row preserve its source so the next sync still pulls upstream values; rows you create from scratch stay manual forever.
-- **Auto-refresh** toggle (re-ingests every 60s) next to the manual `Refresh now` button.
-- Confirmation modal on destructive actions, branch column normalises empty/`HEAD` to `— no branch —`, USD inputs prefixed with `$`.
+- **Top 15 projects** (grouped by `cwd`, not slug — subprojects with the same starting directory show up separately) and **top 15 models by spend**, side-by-side on the dashboard. Clicking a row toggles the filter without leaving the page; click again to clear.
+- **Tab-scoped filters** — Dashboard and Sessions keep independent filter state. Period, project, model and search you set in one tab never affect the other.
+- **Sessions tab** — paginated table with free-text search across project, branch, model and session id; click any row for a **drill-down modal** showing every assistant message with its individual cost. Modal includes a collapsible "What am I looking at?" panel explaining each column.
+- **Multiple named budgets** (calendar-month). Up to 5 can be pinned to the dashboard banner. Per-row Save/Delete with inline ✓ / ✗ feedback. An example budget is seeded on first launch, pinned by default.
+- **OpenRouter pricing engine** — Anthropic-only models, periodic auto-sync (toggleable) + manual sync from UI. Strict idempotency: `POST` to add returns 409 if the model exists; `PUT` to edit returns 404 if it doesn't. Manual edits to an OpenRouter-sourced row keep `source=openrouter` so the next sync still refreshes the value; rows you add from scratch are `manual` forever. USD inputs are prefixed with `$`.
+- **Auto-refresh** and **auto-sync** toggles, persisted server-side. Hover the `Refresh now` and `Sync from OpenRouter` blocks for an explanatory popover.
+- **Container resource monitor** in the header — live CPU % of host, memory % of host (toggleable to absolute MB), and Go goroutine count. Hover for a popover that explains each metric, including how to read goroutines.
+- Confirmation modal on every destructive action, branch column normalises empty / `HEAD` to `— no branch —`.
 
 ---
 
@@ -145,11 +147,15 @@ In-app settings (persisted in SQLite, editable from the UI):
 | GET | `/api/rankings/models?...` | Per-model cost, sorted desc. |
 | GET | `/api/filters` | Distinct project keys (`cwd` first, falls back to slug) and models for the UI selects. |
 | DELETE | `/api/records/{id}` | Remove a single ingested record. |
-| GET / POST / PUT / DELETE | `/api/pricing` | CRUD for the model pricing table. |
+| GET | `/api/pricing` | List all pricing rows. |
+| POST | `/api/pricing` | **Create** a new manual row. Returns **409 Conflict** if the model already exists. |
+| PUT | `/api/pricing/{model}` | **Update** an existing row. Returns **404** if the row doesn't exist. Source is preserved. |
+| DELETE | `/api/pricing/{model}` | Delete a pricing row. Manual rows are gone for good; OpenRouter rows reappear on the next sync. |
 | POST | `/api/pricing/sync` | Force OpenRouter sync now. |
 | GET | `/api/pricing/status` | Last sync time, provider, errors, row count. |
-| GET / POST / PUT / DELETE | `/api/budgets` | CRUD for budgets. |
-| GET / PUT | `/api/settings` | Key/value app settings (auto-sync, auto-refresh, …). |
+| GET / POST / PUT / DELETE | `/api/budgets` | CRUD for budgets (`PUT` accepts `show_in_dashboard`). |
+| GET / PUT | `/api/settings` | Key/value app settings — `auto_refresh_enabled`, `pricing_auto_sync`. |
+| GET | `/api/resources` | Live container metrics: `cpu_pct_host`, `memory_pct_host`, `memoryMB`, `host_cpu_count`, `host_memory_total_mb`, `goroutines`. |
 | POST | `/api/ingest/refresh` | Force a full reconcile of `CLAUDE_PROJECTS_DIR`. |
 
 ---
@@ -165,6 +171,16 @@ In-app settings (persisted in SQLite, editable from the UI):
 ### Project identity = `cwd`, not slug
 
 Claude Code names project directories after the cwd in which a session **started**, but the cwd inside the JSONL can change as you `cd` around mid-session. amatoken groups by the per-record `cwd` (falling back to project_slug when cwd is missing) so subprojects under the same starting directory show up as distinct rows in the rankings.
+
+### Tab-scoped filters
+
+Dashboard and Sessions hold independent filter state — period, project, model and search you set in one tab never leak into the other. Concretely:
+
+- The Dashboard's `qs()` only reads `filters.dashboard` (range, project, model). It powers `/api/summary`, `/api/timeseries`, `/api/rankings/*` and the comparison fetches.
+- The Sessions tab's `sessionsQS()` only reads `filters.sessions` (range, project, model, **search**). It powers `/api/sessions`.
+- Clicking a top-projects or top-models row in the Dashboard mutates `filters.dashboard` and stays on the Dashboard. The Sessions tab is untouched.
+
+The `Refresh now` button and the `Auto-refresh` toggle are global — they trigger a full `reload()` that re-fetches both tabs' data using their respective filters.
 
 ---
 
@@ -185,9 +201,11 @@ Three source levels with strict priority:
 
 | `source` | Origin | Sync behaviour |
 |---|---|---|
-| `manual` | New row created in the UI | **Never** overwritten by sync. |
-| `openrouter` | Pulled from OpenRouter (incl. rows you've edited that came from OpenRouter) | **Always** refreshed on every sync — your edits get reset to upstream values intentionally. |
+| `manual` | Row added from scratch via the UI (`POST /api/pricing` with a model that didn't exist) | **Never** overwritten by sync. Edited via `PUT` keeps the same source. |
+| `openrouter` | Pulled from OpenRouter | **Always** refreshed on every sync. If you edit values via `PUT`, the source stays `openrouter` — so the next sync resets your edit back to upstream. The intent: you can tune temporarily, but the canonical value lives upstream. |
 | `seed` | First-run offline fallback | Replaced as soon as OpenRouter sync succeeds once. |
+
+`POST /api/pricing` is **strict** — it refuses to overwrite an existing row. Use `PUT` (or the **Save** button on the row) to edit. The UI guards against duplicates client-side as well; if a duplicate POST sneaks through (race between two browser tabs, for example), the server's `409` response is surfaced as a styled modal.
 
 Model-id matching has fallbacks: exact match → strip `-YYYYMMDD` date suffix → walk up `-N` version segments. So `claude-haiku-4-5-20251001` resolves to `claude-haiku-4-5`, `claude-opus-4-7` resolves to `claude-opus-4` if no specific entry exists. OpenRouter's `claude-opus-4.7` is auto-normalised to `claude-opus-4-7`.
 
@@ -204,6 +222,9 @@ amatoken/
 │   ├── pricing/                # Provider, OpenRouter, Registry, Calculator
 │   ├── seed/                   # First-run example budget + manual pricing
 │   └── httpapi/                # chi router, handlers, embedded static UI
+│       ├── handlers_usage.go   # summary, timeseries, sessions, drill-down, rankings, budgets, settings
+│       ├── handlers_pricing.go # pricing CRUD (strict POST / preserving PUT) + sync + status
+│       ├── handlers_resources.go # cgroup CPU + memory readers, host totals
 │       └── static/             # index.html + app.js (Alpine) + styles.css + Chart.js via CDN
 ├── assets/img/                 # logo, copied into static/ at build time
 ├── Dockerfile                  # multi-stage: golang:1.23-alpine → alpine:3.20
