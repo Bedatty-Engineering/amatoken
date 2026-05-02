@@ -41,11 +41,10 @@ Non-interactive (CI / scripted boxes) — accepts defaults silently:
 curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/scripts/install.sh | bash -s -- -y
 ```
 
-Custom flags:
+Custom flags — pick a port, branch and install dir:
 
 ```bash
-# pick a port, branch and install dir
-curl -fsSL .../scripts/install.sh | bash -s -- -y -p 9090 -b main -d ~/apps/amatoken
+curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/scripts/install.sh | bash -s -- -y -p 9090 -b main -d ~/apps/amatoken
 ```
 
 | Flag | Default | Purpose |
@@ -69,10 +68,16 @@ xdg-open http://localhost:2001          # or: open http://localhost:2001
 
 Pulls the latest code, rebuilds the image and restarts. Data volume is preserved.
 
+Interactive (shows incoming commits, asks before applying):
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/scripts/update.sh | bash
-# non-interactive:
-curl -fsSL .../scripts/update.sh | bash -s -- -y
+```
+
+Non-interactive:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/scripts/update.sh | bash -s -- -y
 ```
 
 ### Uninstall
@@ -80,11 +85,22 @@ curl -fsSL .../scripts/update.sh | bash -s -- -y
 Stops the container and removes the image. Asks before deleting the SQLite
 volume and the install dir (defaults to keeping both).
 
+Interactive (prompts about volume and install dir):
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/scripts/uninstall.sh | bash
+```
 
-# nuke everything (volume + install dir) without prompts:
-curl -fsSL .../scripts/uninstall.sh | bash -s -- -y --purge
+Keep all data, no prompts:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/scripts/uninstall.sh | bash -s -- -y
+```
+
+Nuke everything (volume + install dir), no prompts:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/scripts/uninstall.sh | bash -s -- -y --purge
 ```
 
 ---
