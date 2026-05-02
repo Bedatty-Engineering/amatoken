@@ -1,0 +1,23 @@
+name: Release
+
+on:
+  push:
+    branches: [main, dev]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  release:
+    # semantic-release pushes a CHANGELOG commit with [skip ci]; this guard
+    # prevents the release job from re-firing on its own commit.
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    uses: Bedatty-Engineering/modules-hub/.github/workflows/release.yml@v1
+    with:
+      ref: ${{ github.ref_name }}
+    secrets:
+      RELEASE_TOKEN:    ${{ secrets.RELEASE_TOKEN }}
+      GPG_PRIVATE_KEY:  ${{ secrets.GPG_PRIVATE_KEY }}
+      GPG_PASSPHRASE:   ${{ secrets.GPG_PASSPHRASE }}

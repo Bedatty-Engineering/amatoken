@@ -1,0 +1,74 @@
+name: Build & attach binaries
+
+on:
+  push:
+    tags:
+      - "v*.*.*"        # stable releases (vX.Y.Z)
+      - "v*.*.*-*"      # prereleases (vX.Y.Z-alpha.N, -beta.N, -rc.N)
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Embed branding assets
+        # Mirrors the Dockerfile: assets/img/* are copied into static/ so
+        # they ship inside the binary via go:embed.
+        run: |
+          cp assets/img/amatoken-logo.png   internal/httpapi/static/logo.png
+          cp assets/img/amatoken-banner.png internal/httpapi/static/banner.png
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS:   ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          OUT="amatoken-${GOOS}-${GOARCH}"
+          go build -trimpath \
+            -ldflags="-s -w -X main.version=${VERSION}" \
+            -o "${OUT}" ./cmd/server
+          sha256sum "${OUT}" > "${OUT}.sha256"
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:     ${{ github.ref_name }}
+          GOOS:    ${{ matrix.goos }}
+          GOARCH:  ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          OUT="amatoken-${GOOS}-${GOARCH}"
+          # Retry briefly: the release may not be visible the instant the
+          # tag lands if semantic-release is still creating it.
+          for i in $(seq 1 30); do
+            if gh release view "$TAG" >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          gh release upload "$TAG" "${OUT}" "${OUT}.sha256" --clobber

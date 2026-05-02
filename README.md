@@ -289,6 +289,19 @@ files. Final image is ~21 MB.
 
 ---
 
+## Releases
+
+amatoken uses [semantic-release](https://semantic-release.gitbook.io/) wired
+through [`Bedatty-Engineering/modules-hub@v1`](https://github.com/Bedatty-Engineering/modules-hub).
+Versions are derived from Conventional Commits; binaries for
+`linux/{amd64,arm64}` and `darwin/{amd64,arm64}` are attached to each GitHub
+Release. Branch model: `main` → `latest` (stable), `dev` → `alpha` prereleases.
+
+See **[`docs/RELEASE.md`](docs/RELEASE.md)** for the full setup (required
+secrets, GPG signing, dry-run instructions).
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
