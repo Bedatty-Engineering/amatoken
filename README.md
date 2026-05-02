@@ -11,69 +11,108 @@ upkeep required.
 
 ---
 
-## Highlights
-
-- **Dashboard** with cost / sessions / messages / tokens cards, all with **period-over-period delta** (▲ red / ▼ green) — works even on `All time` (falls back to month-over-month). Cards are clickable → modal with per-model or per-project breakdown.
-- **Stacked daily/hourly chart** with rich hover tooltips (per-bucket cost, token breakdown, share of period). Bars are clickable → modal with per-model breakdown for that day/hour.
-- **Top 15 projects** (grouped by `cwd`, not slug — subprojects with the same starting directory show up separately) and **top 15 models by spend**, side-by-side on the dashboard. Clicking a row toggles the filter without leaving the page; click again to clear.
-- **Tab-scoped filters** — Dashboard and Sessions keep independent filter state. Period, project, model and search you set in one tab never affect the other.
-- **Sessions tab** — paginated table with free-text search across project, branch, model and session id; click any row for a **drill-down modal** showing every assistant message with its individual cost. Modal includes a collapsible "What am I looking at?" panel explaining each column.
-- **Multiple named budgets** (calendar-month). Up to 5 can be pinned to the dashboard banner. Per-row Save/Delete with inline ✓ / ✗ feedback. An example budget is seeded on first launch, pinned by default.
-- **OpenRouter pricing engine** — Anthropic-only models, periodic auto-sync (toggleable) + manual sync from UI. Strict idempotency: `POST` to add returns 409 if the model exists; `PUT` to edit returns 404 if it doesn't. Manual edits to an OpenRouter-sourced row keep `source=openrouter` so the next sync still refreshes the value; rows you add from scratch are `manual` forever. USD inputs are prefixed with `$`.
-- **Auto-refresh** and **auto-sync** toggles, persisted server-side. Hover the `Refresh now` and `Sync from OpenRouter` blocks for an explanatory popover.
-- **Container resource monitor** in the header — live CPU % of host, memory % of host (toggleable to absolute MB), and Go goroutine count. Hover for a popover that explains each metric, including how to read goroutines.
-- Confirmation modal on every destructive action, branch column normalises empty / `HEAD` to `— no branch —`.
-
----
-
 ## Prerequisites
 
 | Requirement | Minimum | Notes |
 |---|---|---|
 | Docker Engine | 20.10+ | `docker --version` |
-| Docker Compose v2 (optional) | 2.x | `docker compose version`. Without it use the plain `docker run` flow below. |
-| Claude Code | recent build | the app reads from `~/.claude/projects/`; you need at least one logged session. |
-| OS | Linux or macOS | Windows: run inside WSL2. |
-| Free port | 2001 | change via `AMATOKEN_PORT=… docker compose up …`, by editing `docker-compose.yml`, or with `-p`. |
+| `git` | any | needed by the installer to clone the repo |
+| Claude Code | recent build | the app reads from `~/.claude/projects/`; you need at least one logged session |
+| OS | Linux or macOS | Windows: run inside WSL2 |
+| Free port | 2001 | configurable at install time or via `AMATOKEN_PORT` |
 
-**Permissions you need to know:**
-
-- `~/.claude/projects` is usually mode `700` (only your user can read).  
-  → The container must run as your UID/GID. The `docker-compose.yml` sets
-  `user: "${UID}:${GID}"` and the `docker run` example below uses
-  `--user "$(id -u):$(id -g)"`.
-- The named volume `amatoken-db` holds the SQLite file. Wiping it loses budgets,
-  manual prices, settings — but the JSONL re-ingestion runs automatically on
-  the next start.
+> `~/.claude/projects` is usually mode `700` — the container must run as your UID/GID.
+> The installer and the bundled `docker-compose.yml` already do that for you.
 
 ---
 
-## Quick start (Docker Compose)
+## Quick install
+
+One-liner — clones the repo to `~/.amatoken`, builds the image, starts the container,
+waits for `/healthz`, and (if interactive) offers to open the dashboard:
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/scripts/install.sh | bash
+```
+
+Non-interactive (CI / scripted boxes) — accepts defaults silently:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/scripts/install.sh | bash -s -- -y
+```
+
+Custom flags:
+
+```bash
+# pick a port, branch and install dir
+curl -fsSL .../scripts/install.sh | bash -s -- -y -p 9090 -b main -d ~/apps/amatoken
+```
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `-y`, `--yes` | off | non-interactive — skip the port prompt and the open-browser confirmation |
+| `-p`, `--port PORT` | `2001` (or prompted) | host port to bind |
+| `-d`, `--dir DIR` | `~/.amatoken` | clone destination |
+| `-b`, `--branch B` | `main` | git ref to check out |
+
+> Re-running the installer is safe: it `fetch`es and resets the existing checkout
+> to the requested branch, then rebuilds.
+
+After install:
+
+```bash
+curl localhost:2001/healthz             # → ok
+xdg-open http://localhost:2001          # or: open http://localhost:2001
+```
+
+---
+
+## Highlights
+
+- **Dashboard** with cost / sessions / messages / tokens cards, all with **period-over-period delta** (▲ red / ▼ green). Cards are clickable → modal with per-model or per-project breakdown.
+- **Stacked daily/hourly chart** with rich hover tooltips. Bars are clickable → modal with per-model breakdown for that day/hour.
+- **Top 15 projects** (grouped by `cwd`, not slug) and **top 15 models by spend**, side-by-side. Clicking a row toggles a filter without leaving the page.
+- **Tab-scoped filters** — Dashboard and Sessions keep independent filter state.
+- **Sessions tab** — paginated table with free-text search across project, branch, model and session id; click any row for a drill-down modal with every assistant message and its individual cost.
+- **Multiple named budgets** (calendar-month). Up to 5 pinnable to the dashboard banner.
+- **OpenRouter pricing engine** — Anthropic-only models, periodic auto-sync, strict idempotent CRUD.
+- **Container resource monitor** in the header — live host CPU %, memory %, Go goroutine count.
+- Confirmation modal on every destructive action.
+
+---
+
+## Other ways to run
+
+### Docker Compose (manual)
+
+```bash
+git clone https://github.com/Bedatty-Engineering/amatoken.git
 cd amatoken
-export UID=$(id -u) GID=$(id -g)        # so compose's user: gets your real ids
+export UID=$(id -u) GID=$(id -g)
 docker compose up --build -d
-xdg-open http://localhost:2001          # or: open / your browser
 ```
 
-Day-to-day commands:
+Override the host port without editing the file:
 
 ```bash
-docker compose logs -f                  # follow logs
-docker compose restart                  # restart in place
-docker compose down                     # stop, keep volume
-docker compose down -v                  # stop and wipe DB
-docker compose up --build -d            # rebuild after code changes
+AMATOKEN_PORT=9090 docker compose up --build -d
 ```
 
----
-
-## Quick start (plain Docker)
-
-If the Compose v2 plugin isn't installed:
+Day-to-day:
 
 ```bash
+docker compose logs -f
+docker compose restart
+docker compose down                 # stop, keep volume
+docker compose down -v              # stop and wipe DB
+```
+
+### Plain `docker run`
+
+If the Compose v2 plugin isn't available:
+
+```bash
+git clone https://github.com/Bedatty-Engineering/amatoken.git
 cd amatoken
 docker build -t amatoken .
 docker volume create amatoken-db
@@ -87,29 +126,18 @@ docker run -d --name amatoken \
   amatoken
 ```
 
-Day-to-day:
+### Local dev (Go 1.23+)
+
+No Docker, hot-iterate on the code:
 
 ```bash
-docker logs -f amatoken                 # logs
-docker restart amatoken
-docker rm -f amatoken                   # stop & remove (volume preserved)
-docker volume rm amatoken-db            # wipe history
+CLAUDE_PROJECTS_DIR=$HOME/.claude/projects \
+DB_PATH=./amatoken.db \
+  go run ./cmd/server
 ```
 
----
-
-## Verifying it works
-
-```bash
-curl localhost:2001/healthz             # → ok
-curl localhost:2001/api/summary | jq    # totals + cost
-curl localhost:2001/api/pricing/status  # last sync, provider, errors
-```
-
-Open `http://localhost:2001`. First load shows historical sessions immediately
-(initial scan blocks startup briefly, then HTTP serves while ingestion finishes
-in the background). New Claude Code sessions appear within 60s (reconcile tick)
-or instantly via `fsnotify`.
+Static assets (HTML/JS/CSS) and migrations are embedded via `go:embed` — `go run`
+always reflects the current source.
 
 ---
 
@@ -124,6 +152,7 @@ Environment variables (sensible defaults):
 | `LISTEN_ADDR` | `:2001` | HTTP bind address. |
 | `RECONCILE_INTERVAL` | `60s` | Periodic full re-scan in case fsnotify missed an event. |
 | `PRICING_SYNC_INTERVAL` | `12h` | OpenRouter auto-sync cadence (only runs while the toggle is on). |
+| `AMATOKEN_PORT` | `2001` | Host-side port mapping (read by `docker-compose.yml`). |
 
 In-app settings (persisted in SQLite, editable from the UI):
 
@@ -134,7 +163,7 @@ In-app settings (persisted in SQLite, editable from the UI):
 
 ---
 
-## API
+## HTTP API
 
 | Method | Endpoint | Purpose |
 |---|---|---|
@@ -158,56 +187,43 @@ In-app settings (persisted in SQLite, editable from the UI):
 | GET | `/api/resources` | Live container metrics: `cpu_pct_host`, `memory_pct_host`, `memoryMB`, `host_cpu_count`, `host_memory_total_mb`, `goroutines`. |
 | POST | `/api/ingest/refresh` | Force a full reconcile of `CLAUDE_PROJECTS_DIR`. |
 
+Quick smoke test:
+
+```bash
+curl localhost:2001/healthz
+curl localhost:2001/api/summary | jq
+curl localhost:2001/api/pricing/status
+```
+
 ---
 
 ## How ingestion works
 
 - Only lines with `type == "assistant"` and a `message.usage` block become rows. `type=user`, `tool_result`, etc. are ignored — they only contribute to the `input_tokens` of the **next** assistant message.
-- Synthetic events (`model == "<synthetic>"`) — context compactions, system prompts — are excluded from every aggregation. They have no real cost.
+- Synthetic events (`model == "<synthetic>"`) — context compactions, system prompts — are excluded from every aggregation.
 - Dedup is by `message.id` (`INSERT OR IGNORE`).
 - Per-file byte offset is stored in `ingest_state`; container restarts don't re-ingest.
 - `fsnotify` watches every subdir of `CLAUDE_PROJECTS_DIR` (with 500ms debounce). The reconcile tick (default 60s) catches events the watcher missed.
 
-### Project identity = `cwd`, not slug
-
-Claude Code names project directories after the cwd in which a session **started**, but the cwd inside the JSONL can change as you `cd` around mid-session. amatoken groups by the per-record `cwd` (falling back to project_slug when cwd is missing) so subprojects under the same starting directory show up as distinct rows in the rankings.
-
-### Tab-scoped filters
-
-Dashboard and Sessions hold independent filter state — period, project, model and search you set in one tab never leak into the other. Concretely:
-
-- The Dashboard's `qs()` only reads `filters.dashboard` (range, project, model). It powers `/api/summary`, `/api/timeseries`, `/api/rankings/*` and the comparison fetches.
-- The Sessions tab's `sessionsQS()` only reads `filters.sessions` (range, project, model, **search**). It powers `/api/sessions`.
-- Clicking a top-projects or top-models row in the Dashboard mutates `filters.dashboard` and stays on the Dashboard. The Sessions tab is untouched.
-
-The `Refresh now` button and the `Auto-refresh` toggle are global — they trigger a full `reload()` that re-fetches both tabs' data using their respective filters.
+**Project identity = `cwd`, not slug.** Claude Code names project directories after the cwd in which a session *started*, but the cwd inside the JSONL can change as you `cd` around mid-session. amatoken groups by the per-record `cwd` (falling back to project_slug when cwd is missing) so subprojects under the same starting directory show up as distinct rows.
 
 ---
 
 ## Pricing engine
 
-Implemented as a clean **provider/registry/calculator** trio:
-
-```
-internal/pricing/
-├── provider.go     # Provider interface { Name(), Fetch(ctx) → []ModelPrice }
-├── openrouter.go   # OpenRouter implementation (anthropic/* models only)
-├── registry.go     # Coordinator: Sync(), Run(periodic), Status()
-├── rates.go        # SeedDefaults — offline fallback when OpenRouter is unreachable
-└── calc.go         # Calculator (CostEngine) with progressive model-id matching
-```
+Implemented as a clean **provider/registry/calculator** trio under `internal/pricing/`.
 
 Three source levels with strict priority:
 
 | `source` | Origin | Sync behaviour |
 |---|---|---|
-| `manual` | Row added from scratch via the UI (`POST /api/pricing` with a model that didn't exist) | **Never** overwritten by sync. Edited via `PUT` keeps the same source. |
-| `openrouter` | Pulled from OpenRouter | **Always** refreshed on every sync. If you edit values via `PUT`, the source stays `openrouter` — so the next sync resets your edit back to upstream. The intent: you can tune temporarily, but the canonical value lives upstream. |
-| `seed` | First-run offline fallback | Replaced as soon as OpenRouter sync succeeds once. |
+| `manual` | Row added from scratch via the UI (`POST /api/pricing`) | **Never** overwritten by sync. |
+| `openrouter` | Pulled from OpenRouter | **Always** refreshed on every sync. Manual edits stay until next sync. |
+| `seed` | First-run offline fallback | Replaced as soon as OpenRouter sync succeeds. |
 
-`POST /api/pricing` is **strict** — it refuses to overwrite an existing row. Use `PUT` (or the **Save** button on the row) to edit. The UI guards against duplicates client-side as well; if a duplicate POST sneaks through (race between two browser tabs, for example), the server's `409` response is surfaced as a styled modal.
+`POST /api/pricing` is **strict** — it refuses to overwrite an existing row (returns `409`). Use `PUT` to edit.
 
-Model-id matching has fallbacks: exact match → strip `-YYYYMMDD` date suffix → walk up `-N` version segments. So `claude-haiku-4-5-20251001` resolves to `claude-haiku-4-5`, `claude-opus-4-7` resolves to `claude-opus-4` if no specific entry exists. OpenRouter's `claude-opus-4.7` is auto-normalised to `claude-opus-4-7`.
+Model-id matching has fallbacks: exact match → strip `-YYYYMMDD` date suffix → walk up `-N` version segments. So `claude-haiku-4-5-20251001` resolves to `claude-haiku-4-5`. OpenRouter's `claude-opus-4.7` is auto-normalised to `claude-opus-4-7`.
 
 ---
 
@@ -222,29 +238,16 @@ amatoken/
 │   ├── pricing/                # Provider, OpenRouter, Registry, Calculator
 │   ├── seed/                   # First-run example budget + manual pricing
 │   └── httpapi/                # chi router, handlers, embedded static UI
-│       ├── handlers_usage.go   # summary, timeseries, sessions, drill-down, rankings, budgets, settings
-│       ├── handlers_pricing.go # pricing CRUD (strict POST / preserving PUT) + sync + status
-│       ├── handlers_resources.go # cgroup CPU + memory readers, host totals
-│       └── static/             # index.html + app.js (Alpine) + styles.css + Chart.js via CDN
 ├── assets/img/                 # logo, copied into static/ at build time
+├── scripts/install.sh          # quick install (curl | bash)
 ├── Dockerfile                  # multi-stage: golang:1.23-alpine → alpine:3.20
 ├── docker-compose.yml
-├── go.mod / go.sum
 └── README.md
 ```
 
-Stack: **Go 1.23**, **chi** (router), **modernc.org/sqlite** (pure Go, no CGO), **fsnotify**. Frontend: vanilla **Alpine.js** + **Chart.js** via CDN, served as `go:embed` static files. Final image is ~21 MB (Alpine + statically linked binary).
-
----
-
-## Tips on lowering your spend
-
-amatoken is the *measurement* tool — but here's what tends to move the needle:
-
-- **Switch model per task.** Haiku ($1/$5/M) for greps and renames, Sonnet ($3/$15/M) for most coding work, Opus ($5/$25/M) for architecture and tough debugging. The **Top models by spend** panel makes it obvious which model is eating your budget.
-- **Start a fresh session for unrelated work.** As context grows, occasional cache writes (priced ~1.25× input) add up. New session = clean cache.
-- **Be specific.** Vague prompts trigger exploration; precise file/line references skip it.
-- **`Read` with `offset`/`limit`** instead of letting Claude pull whole large files.
+Stack: **Go 1.23**, **chi**, **modernc.org/sqlite** (pure Go, no CGO), **fsnotify**.
+Frontend: vanilla **Alpine.js** + **Chart.js** via CDN, served as `go:embed` static
+files. Final image is ~21 MB.
 
 ---
 
@@ -254,32 +257,22 @@ amatoken is the *measurement* tool — but here's what tends to move the needle:
 |---|---|---|
 | `open db: unable to open database file` | Container UID can't write to `/data`. | Use `--user "$(id -u):$(id -g)"` (already in compose). |
 | Dashboard empty despite JSONL existing | Container can't read `~/.claude/projects` (mode 700). | Same fix: run as your host UID. |
-| `port is already allocated` | Port 2001 taken. | Re-map: `-p 9090:2001` (or set `AMATOKEN_PORT=9090` before `docker compose up`). |
-| `docker compose up --build -d` → `unknown flag: --build` | Compose v2 plugin missing. | `sudo apt install docker-compose-v2` (Ubuntu/Debian); or use the plain `docker run` flow above. |
+| `port is already allocated` | Port 2001 taken. | Re-install with `-p 9090`, or `AMATOKEN_PORT=9090 docker compose up`. |
+| `unknown flag: --build` | Compose v2 plugin missing. | `sudo apt install docker-compose-v2`, or use the plain `docker run` flow. |
 | New session not appearing | fsnotify missed the create. | Click **Refresh now**, wait up to 60s, or `curl -X POST localhost:2001/api/ingest/refresh`. |
-| A model shows `$0.00` cost | No pricing row for that exact id, and no fallback matched. | Click **Sync from OpenRouter**, or add the row manually in the **Pricing** tab. |
+| A model shows `$0.00` cost | No pricing row for that exact id, no fallback matched. | Click **Sync from OpenRouter**, or add the row manually in **Pricing**. |
 | OpenRouter sync fails | Rate limit / network blip. | Cached values keep working; the next periodic tick retries. Check `GET /api/pricing/status`. |
 
 ---
 
-## Development
+## Tips on lowering your spend
 
-No Go toolchain needed locally — the build runs inside `golang:1.23-alpine`:
+amatoken is the *measurement* tool — but here's what tends to move the needle:
 
-```bash
-docker compose up --build -d            # rebuild + restart
-docker compose logs -f
-```
-
-If you do have **Go 1.23+** installed and want hot-iterate:
-
-```bash
-CLAUDE_PROJECTS_DIR=$HOME/.claude/projects \
-DB_PATH=./amatoken.db \
-  go run ./cmd/server
-```
-
-Then visit `http://localhost:2001`. Static assets (HTML/JS/CSS) and migrations are embedded via `go:embed` — `go run` always reflects the current source.
+- **Switch model per task.** Haiku for greps and renames, Sonnet for most coding work, Opus for architecture and tough debugging. The **Top models by spend** panel makes it obvious which model is eating your budget.
+- **Start a fresh session for unrelated work.** As context grows, occasional cache writes (priced ~1.25× input) add up. New session = clean cache.
+- **Be specific.** Vague prompts trigger exploration; precise file/line references skip it.
+- **`Read` with `offset`/`limit`** instead of letting Claude pull whole large files.
 
 ---
 
