@@ -26,7 +26,7 @@ func env(key, def string) string {
 func main() {
 	root := env("CLAUDE_PROJECTS_DIR", "/claude-projects")
 	dbPath := env("DB_PATH", "/data/amatoken.db")
-	addr := env("LISTEN_ADDR", ":8080")
+	addr := env("LISTEN_ADDR", ":2001")
 	intervalStr := env("RECONCILE_INTERVAL", "60s")
 	interval, err := time.ParseDuration(intervalStr)
 	if err != nil {

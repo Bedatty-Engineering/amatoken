@@ -34,7 +34,7 @@ upkeep required.
 | Docker Compose v2 (optional) | 2.x | `docker compose version`. Without it use the plain `docker run` flow below. |
 | Claude Code | recent build | the app reads from `~/.claude/projects/`; you need at least one logged session. |
 | OS | Linux or macOS | Windows: run inside WSL2. |
-| Free port | 8080 | change in `docker-compose.yml` or via `-p` if it conflicts. |
+| Free port | 2001 | change via `AMATOKEN_PORT=… docker compose up …`, by editing `docker-compose.yml`, or with `-p`. |
 
 **Permissions you need to know:**
 
@@ -54,7 +54,7 @@ upkeep required.
 cd amatoken
 export UID=$(id -u) GID=$(id -g)        # so compose's user: gets your real ids
 docker compose up --build -d
-xdg-open http://localhost:8080          # or: open / your browser
+xdg-open http://localhost:2001          # or: open / your browser
 ```
 
 Day-to-day commands:
@@ -80,7 +80,7 @@ docker volume create amatoken-db
 
 docker run -d --name amatoken \
   --user "$(id -u):$(id -g)" \
-  -p 8080:8080 \
+  -p 2001:2001 \
   -v "$HOME/.claude/projects:/claude-projects:ro" \
   -v amatoken-db:/data \
   --restart unless-stopped \
@@ -101,12 +101,12 @@ docker volume rm amatoken-db            # wipe history
 ## Verifying it works
 
 ```bash
-curl localhost:8080/healthz             # → ok
-curl localhost:8080/api/summary | jq    # totals + cost
-curl localhost:8080/api/pricing/status  # last sync, provider, errors
+curl localhost:2001/healthz             # → ok
+curl localhost:2001/api/summary | jq    # totals + cost
+curl localhost:2001/api/pricing/status  # last sync, provider, errors
 ```
 
-Open `http://localhost:8080`. First load shows historical sessions immediately
+Open `http://localhost:2001`. First load shows historical sessions immediately
 (initial scan blocks startup briefly, then HTTP serves while ingestion finishes
 in the background). New Claude Code sessions appear within 60s (reconcile tick)
 or instantly via `fsnotify`.
@@ -121,7 +121,7 @@ Environment variables (sensible defaults):
 |---|---|---|
 | `CLAUDE_PROJECTS_DIR` | `/claude-projects` | Where the JSONL files live inside the container (set by the volume mount). |
 | `DB_PATH` | `/data/amatoken.db` | SQLite file path. |
-| `LISTEN_ADDR` | `:8080` | HTTP bind address. |
+| `LISTEN_ADDR` | `:2001` | HTTP bind address. |
 | `RECONCILE_INTERVAL` | `60s` | Periodic full re-scan in case fsnotify missed an event. |
 | `PRICING_SYNC_INTERVAL` | `12h` | OpenRouter auto-sync cadence (only runs while the toggle is on). |
 
@@ -254,9 +254,9 @@ amatoken is the *measurement* tool — but here's what tends to move the needle:
 |---|---|---|
 | `open db: unable to open database file` | Container UID can't write to `/data`. | Use `--user "$(id -u):$(id -g)"` (already in compose). |
 | Dashboard empty despite JSONL existing | Container can't read `~/.claude/projects` (mode 700). | Same fix: run as your host UID. |
-| `port is already allocated` | Port 8080 taken. | Re-map: `-p 9090:8080` (or change in `docker-compose.yml`). |
+| `port is already allocated` | Port 2001 taken. | Re-map: `-p 9090:2001` (or set `AMATOKEN_PORT=9090` before `docker compose up`). |
 | `docker compose up --build -d` → `unknown flag: --build` | Compose v2 plugin missing. | `sudo apt install docker-compose-v2` (Ubuntu/Debian); or use the plain `docker run` flow above. |
-| New session not appearing | fsnotify missed the create. | Click **Refresh now**, wait up to 60s, or `curl -X POST localhost:8080/api/ingest/refresh`. |
+| New session not appearing | fsnotify missed the create. | Click **Refresh now**, wait up to 60s, or `curl -X POST localhost:2001/api/ingest/refresh`. |
 | A model shows `$0.00` cost | No pricing row for that exact id, and no fallback matched. | Click **Sync from OpenRouter**, or add the row manually in the **Pricing** tab. |
 | OpenRouter sync fails | Rate limit / network blip. | Cached values keep working; the next periodic tick retries. Check `GET /api/pricing/status`. |
 
@@ -279,7 +279,7 @@ DB_PATH=./amatoken.db \
   go run ./cmd/server
 ```
 
-Then visit `http://localhost:8080`. Static assets (HTML/JS/CSS) and migrations are embedded via `go:embed` — `go run` always reflects the current source.
+Then visit `http://localhost:2001`. Static assets (HTML/JS/CSS) and migrations are embedded via `go:embed` — `go run` always reflects the current source.
 
 ---
 
