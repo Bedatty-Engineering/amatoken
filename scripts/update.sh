@@ -94,8 +94,8 @@ git reset --hard "origin/$BRANCH"
 ok "Source updated to $(git rev-parse --short HEAD)"
 
 # --- rebuild & restart ---------------------------------------------------
-export UID="${UID:-$(id -u)}"
-export GID="${GID:-$(id -g)}"
+export AMATOKEN_UID="$(id -u)"
+export AMATOKEN_GID="$(id -g)"
 
 if [ -n "$COMPOSE" ]; then
   info "Rebuilding & restarting via $COMPOSE"

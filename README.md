@@ -110,7 +110,7 @@ curl -fsSL .../scripts/uninstall.sh | bash -s -- -y --purge
 ```bash
 git clone https://github.com/Bedatty-Engineering/amatoken.git
 cd amatoken
-export UID=$(id -u) GID=$(id -g)
+export AMATOKEN_UID=$(id -u) AMATOKEN_GID=$(id -g)
 docker compose up --build -d
 ```
 

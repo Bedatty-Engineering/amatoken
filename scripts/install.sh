@@ -107,10 +107,11 @@ ok "Source ready"
 cd "$INSTALL_DIR"
 
 # --- build & run ---------------------------------------------------------
-# docker-compose.yml reads ${AMATOKEN_PORT:-2001} for the host port mapping.
+# docker-compose.yml reads AMATOKEN_PORT, AMATOKEN_UID and AMATOKEN_GID.
+# (UID is readonly in bash, so we use namespaced env vars instead.)
 export AMATOKEN_PORT="$PORT"
-export UID="${UID:-$(id -u)}"
-export GID="${GID:-$(id -g)}"
+export AMATOKEN_UID="$(id -u)"
+export AMATOKEN_GID="$(id -g)"
 info "Host port → $PORT (container listens on 2001)"
 
 if [ -n "$COMPOSE" ]; then

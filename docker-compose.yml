@@ -4,7 +4,7 @@ services:
     container_name: amatoken
     # Run as the host user so we can read ~/.claude/projects (mode 700) and
     # write the SQLite volume. Override via UID/GID env vars if needed.
-    user: "${UID:-1000}:${GID:-1000}"
+    user: "${AMATOKEN_UID:-1000}:${AMATOKEN_GID:-1000}"
     ports:
       - "${AMATOKEN_PORT:-2001}:2001"
     environment:
