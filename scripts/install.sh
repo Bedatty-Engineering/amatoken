@@ -8,7 +8,7 @@
 # Flags:
 #   -y, --yes        non-interactive (assume defaults, no prompts)
 #   -d, --dir DIR    install dir (default: $HOME/.amatoken)
-#   -p, --port PORT  host port to bind (default: 2001, prompted if interactive)
+#   -p, --port PORT  host port to bind (default: 2002, prompted if interactive)
 #   -b, --branch B   git branch / ref (default: main)
 #   -h, --help       show this help
 
@@ -16,7 +16,7 @@ set -euo pipefail
 
 REPO_URL="https://github.com/Bedatty-Engineering/amatoken.git"
 INSTALL_DIR="${AMATOKEN_DIR:-$HOME/.amatoken}"
-DEFAULT_PORT=2001
+DEFAULT_PORT=2002
 PORT="${AMATOKEN_PORT:-}"
 BRANCH="${AMATOKEN_BRANCH:-main}"
 ASSUME_YES=0
@@ -112,7 +112,7 @@ cd "$INSTALL_DIR"
 export AMATOKEN_PORT="$PORT"
 export AMATOKEN_UID="$(id -u)"
 export AMATOKEN_GID="$(id -g)"
-info "Host port → $PORT (container listens on 2001)"
+info "Host port → $PORT (container listens on 2002)"
 
 if [ -n "$COMPOSE" ]; then
   info "Building & starting via $COMPOSE"
@@ -125,7 +125,7 @@ else
   info "Starting container"
   docker run -d --name amatoken \
     --user "$(id -u):$(id -g)" \
-    -p "${PORT}:2001" \
+    -p "${PORT}:2002" \
     -v "$HOME/.claude/projects:/claude-projects:ro" \
     -v amatoken-db:/data \
     --restart unless-stopped \

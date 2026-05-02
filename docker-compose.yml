@@ -6,11 +6,11 @@ services:
     # write the SQLite volume. Override via UID/GID env vars if needed.
     user: "${AMATOKEN_UID:-1000}:${AMATOKEN_GID:-1000}"
     ports:
-      - "${AMATOKEN_PORT:-2001}:2001"
+      - "${AMATOKEN_PORT:-2002}:2002"
     environment:
       CLAUDE_PROJECTS_DIR: /claude-projects
       DB_PATH: /data/amatoken.db
-      LISTEN_ADDR: ":2001"
+      LISTEN_ADDR: ":2002"
       RECONCILE_INTERVAL: 60s
     volumes:
       - ${HOME}/.claude/projects:/claude-projects:ro

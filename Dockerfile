@@ -14,5 +14,5 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata && mkdir -p /data && chmod 777 /data
 COPY --from=build /out/amatoken /usr/local/bin/amatoken
 VOLUME ["/data"]
-EXPOSE 2001
+EXPOSE 2002
 ENTRYPOINT ["/usr/local/bin/amatoken"]

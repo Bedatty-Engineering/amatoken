@@ -104,12 +104,12 @@ else
   warn "docker compose not found — falling back to plain docker"
   info "Rebuilding image"
   docker build -t amatoken .
-  PORT=$(docker inspect -f '{{(index (index .NetworkSettings.Ports "2001/tcp") 0).HostPort}}' amatoken 2>/dev/null || echo 2001)
+  PORT=$(docker inspect -f '{{(index (index .NetworkSettings.Ports "2002/tcp") 0).HostPort}}' amatoken 2>/dev/null || echo 2002)
   docker rm -f amatoken >/dev/null 2>&1 || true
   info "Starting container on port $PORT"
   docker run -d --name amatoken \
     --user "$(id -u):$(id -g)" \
-    -p "${PORT}:2001" \
+    -p "${PORT}:2002" \
     -v "$HOME/.claude/projects:/claude-projects:ro" \
     -v amatoken-db:/data \
     --restart unless-stopped \
@@ -117,7 +117,7 @@ else
 fi
 
 # --- health check --------------------------------------------------------
-PORT=$(docker inspect -f '{{(index (index .NetworkSettings.Ports "2001/tcp") 0).HostPort}}' amatoken 2>/dev/null || echo 2001)
+PORT=$(docker inspect -f '{{(index (index .NetworkSettings.Ports "2002/tcp") 0).HostPort}}' amatoken 2>/dev/null || echo 2002)
 URL="http://localhost:${PORT}"
 info "Waiting for $URL/healthz"
 for i in $(seq 1 30); do

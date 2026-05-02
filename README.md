@@ -19,7 +19,7 @@ upkeep required.
 | `git` | any | needed by the installer to clone the repo |
 | Claude Code | recent build | the app reads from `~/.claude/projects/`; you need at least one logged session |
 | OS | Linux or macOS | Windows: run inside WSL2 |
-| Free port | 2001 | configurable at install time or via `AMATOKEN_PORT` |
+| Free port | 2002 | configurable at install time or via `AMATOKEN_PORT` |
 
 > `~/.claude/projects` is usually mode `700` — the container must run as your UID/GID.
 > The installer and the bundled `docker-compose.yml` already do that for you.
@@ -50,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/s
 | Flag | Default | Purpose |
 |---|---|---|
 | `-y`, `--yes` | off | non-interactive — skip the port prompt and the open-browser confirmation |
-| `-p`, `--port PORT` | `2001` (or prompted) | host port to bind |
+| `-p`, `--port PORT` | `2002` (or prompted) | host port to bind |
 | `-d`, `--dir DIR` | `~/.amatoken` | clone destination |
 | `-b`, `--branch B` | `main` | git ref to check out |
 
@@ -60,8 +60,8 @@ curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/s
 After install:
 
 ```bash
-curl localhost:2001/healthz             # → ok
-xdg-open http://localhost:2001          # or: open http://localhost:2001
+curl localhost:2002/healthz             # → ok
+xdg-open http://localhost:2002          # or: open http://localhost:2002
 ```
 
 ### Update
@@ -157,7 +157,7 @@ docker volume create amatoken-db
 
 docker run -d --name amatoken \
   --user "$(id -u):$(id -g)" \
-  -p 2001:2001 \
+  -p 2002:2002 \
   -v "$HOME/.claude/projects:/claude-projects:ro" \
   -v amatoken-db:/data \
   --restart unless-stopped \
@@ -187,10 +187,10 @@ Environment variables (sensible defaults):
 |---|---|---|
 | `CLAUDE_PROJECTS_DIR` | `/claude-projects` | Where the JSONL files live inside the container (set by the volume mount). |
 | `DB_PATH` | `/data/amatoken.db` | SQLite file path. |
-| `LISTEN_ADDR` | `:2001` | HTTP bind address. |
+| `LISTEN_ADDR` | `:2002` | HTTP bind address. |
 | `RECONCILE_INTERVAL` | `60s` | Periodic full re-scan in case fsnotify missed an event. |
 | `PRICING_SYNC_INTERVAL` | `12h` | OpenRouter auto-sync cadence (only runs while the toggle is on). |
-| `AMATOKEN_PORT` | `2001` | Host-side port mapping (read by `docker-compose.yml`). |
+| `AMATOKEN_PORT` | `2002` | Host-side port mapping (read by `docker-compose.yml`). |
 
 In-app settings (persisted in SQLite, editable from the UI):
 
@@ -228,9 +228,9 @@ In-app settings (persisted in SQLite, editable from the UI):
 Quick smoke test:
 
 ```bash
-curl localhost:2001/healthz
-curl localhost:2001/api/summary | jq
-curl localhost:2001/api/pricing/status
+curl localhost:2002/healthz
+curl localhost:2002/api/summary | jq
+curl localhost:2002/api/pricing/status
 ```
 
 ---
@@ -295,9 +295,9 @@ files. Final image is ~21 MB.
 |---|---|---|
 | `open db: unable to open database file` | Container UID can't write to `/data`. | Use `--user "$(id -u):$(id -g)"` (already in compose). |
 | Dashboard empty despite JSONL existing | Container can't read `~/.claude/projects` (mode 700). | Same fix: run as your host UID. |
-| `port is already allocated` | Port 2001 taken. | Re-install with `-p 9090`, or `AMATOKEN_PORT=9090 docker compose up`. |
+| `port is already allocated` | Port 2002 taken. | Re-install with `-p 9090`, or `AMATOKEN_PORT=9090 docker compose up`. |
 | `unknown flag: --build` | Compose v2 plugin missing. | `sudo apt install docker-compose-v2`, or use the plain `docker run` flow. |
-| New session not appearing | fsnotify missed the create. | Click **Refresh now**, wait up to 60s, or `curl -X POST localhost:2001/api/ingest/refresh`. |
+| New session not appearing | fsnotify missed the create. | Click **Refresh now**, wait up to 60s, or `curl -X POST localhost:2002/api/ingest/refresh`. |
 | A model shows `$0.00` cost | No pricing row for that exact id, no fallback matched. | Click **Sync from OpenRouter**, or add the row manually in **Pricing**. |
 | OpenRouter sync fails | Rate limit / network blip. | Cached values keep working; the next periodic tick retries. Check `GET /api/pricing/status`. |
 
