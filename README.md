@@ -65,6 +65,28 @@ curl localhost:2001/healthz             # → ok
 xdg-open http://localhost:2001          # or: open http://localhost:2001
 ```
 
+### Update
+
+Pulls the latest code, rebuilds the image and restarts. Data volume is preserved.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/scripts/update.sh | bash
+# non-interactive:
+curl -fsSL .../scripts/update.sh | bash -s -- -y
+```
+
+### Uninstall
+
+Stops the container and removes the image. Asks before deleting the SQLite
+volume and the install dir (defaults to keeping both).
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/scripts/uninstall.sh | bash
+
+# nuke everything (volume + install dir) without prompts:
+curl -fsSL .../scripts/uninstall.sh | bash -s -- -y --purge
+```
+
 ---
 
 ## Highlights
@@ -239,7 +261,7 @@ amatoken/
 │   ├── seed/                   # First-run example budget + manual pricing
 │   └── httpapi/                # chi router, handlers, embedded static UI
 ├── assets/img/                 # logo, copied into static/ at build time
-├── scripts/install.sh          # quick install (curl | bash)
+├── scripts/                    # install.sh, update.sh, uninstall.sh
 ├── Dockerfile                  # multi-stage: golang:1.23-alpine → alpine:3.20
 ├── docker-compose.yml
 └── README.md
