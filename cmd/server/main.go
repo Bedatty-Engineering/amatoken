@@ -12,6 +12,7 @@ import (
 	"github.com/bedatty/amatoken/internal/httpapi"
 	"github.com/bedatty/amatoken/internal/ingest"
 	"github.com/bedatty/amatoken/internal/pricing"
+	"github.com/bedatty/amatoken/internal/rtkgain"
 	"github.com/bedatty/amatoken/internal/seed"
 	"github.com/bedatty/amatoken/internal/storage"
 )
@@ -67,9 +68,18 @@ func main() {
 	registry := pricing.NewRegistry(repo, pricing.NewOpenRouter(), pricingInterval)
 	go registry.Run(ctx)
 
+	rtkDBPath := env("RTK_DB_PATH", "")
+	rtkReader, err := rtkgain.New(rtkDBPath)
+	if err != nil {
+		log.Printf("rtk: init failed: %v (continuing without RTK tab)", err)
+	} else if rtkReader != nil {
+		log.Printf("rtk: opened RTK database at %s", rtkDBPath)
+		defer rtkReader.Close()
+	}
+
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           httpapi.New(repo, scanner, registry).Router(),
+		Handler:           httpapi.New(repo, scanner, registry, rtkReader).Router(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {

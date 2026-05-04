@@ -45,6 +45,9 @@ function amatoken() {
     ],
     newPricing: { model: '', input_per_mtok_usd: 0, output_per_mtok_usd: 0, cache_write_per_mtok_usd: 0, cache_read_per_mtok_usd: 0 },
     chart: null,
+    rtkChart: null,
+    rtkSummary: null,
+    rtkTimeseries: [],
 
     async init() {
       await this.loadFilterOptions();
@@ -52,6 +55,7 @@ function amatoken() {
       await this.loadAutomationSettings();
       await this.reload();
       await this.loadPricing();
+      await this.loadRTK();
       this.pollResources();
     },
 
@@ -771,6 +775,60 @@ function amatoken() {
           await this.reload();
         },
       );
+    },
+
+    async loadRTK() {
+      const [summary, timeseries] = await Promise.all([
+        fetch('/api/rtk/summary').then(r=>r.json()).catch(() => ({})),
+        fetch('/api/rtk/timeseries?bucket=day').then(r=>r.json()).catch(() => []),
+      ]);
+      this.rtkSummary = summary;
+      this.rtkTimeseries = timeseries || [];
+      this.renderRTKChart();
+    },
+
+    renderRTKChart() {
+      if (typeof Chart === 'undefined' || !this.rtkTimeseries || this.rtkTimeseries.length === 0) return;
+
+      const ctx = document.getElementById('rtkChart');
+      if (!ctx) return;
+
+      if (this.rtkChart) this.rtkChart.destroy();
+
+      this.rtkChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: this.rtkTimeseries.map(p => p.date),
+          datasets: [
+            {
+              label: 'Tokens saved',
+              data: this.rtkTimeseries.map(p => p.saved_tokens || 0),
+              backgroundColor: 'rgba(75, 192, 75, 0.6)',
+              borderColor: 'rgba(75, 192, 75, 1)',
+              borderWidth: 1,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          scales: {
+            y: { beginAtZero: true, title: { display: true, text: 'Tokens' } },
+          },
+          plugins: {
+            legend: { display: true },
+            tooltip: {
+              callbacks: {
+                afterLabel(ctx) {
+                  const idx = ctx.dataIndex;
+                  const p = this.$scope.rtkTimeseries[idx];
+                  return p ? `${(p.savings_pct || 0).toFixed(1)}% saved` : '';
+                },
+              },
+            },
+          },
+        },
+      });
     },
   };
 }

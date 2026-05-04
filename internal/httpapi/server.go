@@ -7,6 +7,7 @@ import (
 
 	"github.com/bedatty/amatoken/internal/ingest"
 	"github.com/bedatty/amatoken/internal/pricing"
+	"github.com/bedatty/amatoken/internal/rtkgain"
 	"github.com/bedatty/amatoken/internal/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -19,10 +20,11 @@ type Server struct {
 	Repo            *storage.Repo
 	Scanner         *ingest.Scanner
 	PricingRegistry *pricing.Registry
+	RTKReader       *rtkgain.Reader
 }
 
-func New(repo *storage.Repo, scanner *ingest.Scanner, registry *pricing.Registry) *Server {
-	return &Server{Repo: repo, Scanner: scanner, PricingRegistry: registry}
+func New(repo *storage.Repo, scanner *ingest.Scanner, registry *pricing.Registry, rtkReader *rtkgain.Reader) *Server {
+	return &Server{Repo: repo, Scanner: scanner, PricingRegistry: registry, RTKReader: rtkReader}
 }
 
 func (s *Server) Router() http.Handler {
@@ -60,6 +62,9 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/pricing/{model}", s.handleDeletePricing)
 		r.Post("/pricing/sync", s.handlePricingSync)
 		r.Get("/pricing/status", s.handlePricingStatus)
+
+		r.Get("/rtk/summary", s.handleRTKSummary)
+		r.Get("/rtk/timeseries", s.handleRTKTimeSeries)
 
 		r.Post("/ingest/refresh", s.handleRefresh)
 	})

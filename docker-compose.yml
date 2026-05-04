@@ -2,9 +2,10 @@ services:
   amatoken:
     build: .
     container_name: amatoken
-    # Run as the host user so we can read ~/.claude/projects (mode 700) and
-    # write the SQLite volume. Override via UID/GID env vars if needed.
-    user: "${AMATOKEN_UID:-1000}:${AMATOKEN_GID:-1000}"
+    # Run as root so RTK can access its tracking database in the mounted volume.
+    # RTK attempts to initialize its database with file permissions that require
+    # root or the owning user; running as root ensures compatibility.
+    user: "0:0"
     ports:
       - "${AMATOKEN_PORT:-2002}:2002"
     environment:
@@ -12,8 +13,10 @@ services:
       DB_PATH: /data/amatoken.db
       LISTEN_ADDR: ":2002"
       RECONCILE_INTERVAL: 60s
+      RTK_DB_PATH: /rtk-data/history.db
     volumes:
       - ${HOME}/.claude/projects:/claude-projects:ro
+      - ${HOME}/.local/share/rtk:/rtk-data
       - amatoken-db:/data
     restart: unless-stopped
 

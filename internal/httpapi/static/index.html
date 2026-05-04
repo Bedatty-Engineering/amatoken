@@ -22,6 +22,7 @@
       <button :class="tab==='sessions' && 'active'" @click="tab='sessions'">Sessions</button>
       <button :class="tab==='budgets' && 'active'" @click="tab='budgets'">Budgets</button>
       <button :class="tab==='pricing' && 'active'" @click="tab='pricing'">Pricing</button>
+      <button :class="tab==='rtk' && 'active'" @click="tab='rtk'; loadRTK()">RTK</button>
       <span class="action-group has-tooltip">
         <button class="ghost" @click="refresh()" :disabled="refreshing">Refresh now</button>
         <span class="action-feedback">
@@ -328,6 +329,41 @@
         </tr>
       </tbody>
     </table>
+  </main>
+
+  <main x-show="tab==='rtk'">
+    <h2>RTK Savings</h2>
+    <template x-if="rtkSummary && !rtkSummary.available">
+      <p class="hint">
+        RTK data is not available. To enable the RTK tab, ensure <code>~/.local/share/rtk/history.db</code>
+        exists (run <code>rtk gain</code> at least once), and verify the volume mount in
+        <code>docker-compose.yml</code>:<br/>
+        <code>- ${HOME}/.local/share/rtk:/rtk-data:ro</code>
+      </p>
+    </template>
+    <template x-if="rtkSummary && rtkSummary.available">
+      <div class="cards">
+        <div class="card">
+          <div class="card-title">Tokens saved</div>
+          <div class="card-value" x-text="(rtkSummary.saved_tokens || 0).toLocaleString()"></div>
+          <div class="card-meta" x-text="`${(rtkSummary.savings_pct || 0).toFixed(1)}% efficiency`"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Commands intercepted</div>
+          <div class="card-value" x-text="(rtkSummary.total_commands || 0).toLocaleString()"></div>
+          <div class="card-meta" x-text="`Input: ${(rtkSummary.input_tokens || 0).toLocaleString()}`"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Time saved</div>
+          <div class="card-value" x-text="`${((rtkSummary.total_time_ms || 0) / 60000).toFixed(1)}m`"></div>
+          <div class="card-meta" x-text="`${(rtkSummary.total_time_ms / 1000 / (rtkSummary.total_commands || 1)).toFixed(0)}s/cmd`"></div>
+        </div>
+      </div>
+      <div class="chart-container" x-show="rtkTimeseries && rtkTimeseries.length > 0">
+        <h3>Daily savings</h3>
+        <canvas id="rtkChart" style="max-width: 100%; max-height: 400px;"></canvas>
+      </div>
+    </template>
   </main>
 
   <div class="modal-backdrop" x-show="drilldown.open" @click.self="closeDrilldown()" x-cloak>
