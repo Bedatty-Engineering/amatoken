@@ -18,6 +18,20 @@ func (s *Server) handleRTKSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, summary)
 }
 
+func (s *Server) handleRTKCommands(w http.ResponseWriter, r *http.Request) {
+	if s.RTKReader == nil {
+		writeJSON(w, 200, []struct{}{})
+		return
+	}
+	date := r.URL.Query().Get("date") // optional YYYY-MM-DD
+	cmds, err := s.RTKReader.Commands(r.Context(), 10, date)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, cmds)
+}
+
 func (s *Server) handleRTKTimeSeries(w http.ResponseWriter, r *http.Request) {
 	if s.RTKReader == nil {
 		writeJSON(w, 200, []struct{}{})
@@ -41,7 +55,8 @@ func (s *Server) handleRTKTimeSeries(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	points, err := s.RTKReader.TimeSeries(r.Context(), bucket, from, to)
+	command := r.URL.Query().Get("command")
+	points, err := s.RTKReader.TimeSeries(r.Context(), bucket, from, to, command)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return

@@ -25,6 +25,17 @@ type TimePoint struct {
 	Commands    int64   `json:"commands"`
 	SavedTokens int64   `json:"saved_tokens"`
 	SavingsPct  float64 `json:"savings_pct"`
+	TotalTimeMs int64   `json:"total_time_ms"`
+}
+
+type CommandStat struct {
+	Rank        int     `json:"rank"`
+	Command     string  `json:"command"`
+	Count       int64   `json:"count"`
+	SavedTokens int64   `json:"saved_tokens"`
+	SavingsPct  float64 `json:"savings_pct"`
+	TotalTimeMs int64   `json:"total_time_ms"`
+	ImpactPct   float64 `json:"impact_pct"`
 }
 
 type Reader struct {
@@ -34,6 +45,7 @@ type Reader struct {
 	cacheTTL         time.Duration
 	cachedSummary    *Summary
 	cachedTimeseries []TimePoint
+	cachedCommands   []CommandStat
 }
 
 func New(dbPath string) (*Reader, error) {
@@ -109,18 +121,21 @@ func (r *Reader) Summary(ctx context.Context) (*Summary, error) {
 	return &s, nil
 }
 
-func (r *Reader) TimeSeries(ctx context.Context, bucket string, from, to *time.Time) ([]TimePoint, error) {
+func (r *Reader) TimeSeries(ctx context.Context, bucket string, from, to *time.Time, command string) ([]TimePoint, error) {
 	if !r.IsAvailable() {
 		return []TimePoint{}, nil
 	}
 
-	r.mu.Lock()
-	if r.cachedTimeseries != nil && time.Since(r.lastFetch) < r.cacheTTL {
-		ts := r.cachedTimeseries
+	// Only use cache for unfiltered queries.
+	if command == "" {
+		r.mu.Lock()
+		if r.cachedTimeseries != nil && time.Since(r.lastFetch) < r.cacheTTL {
+			ts := r.cachedTimeseries
+			r.mu.Unlock()
+			return ts, nil
+		}
 		r.mu.Unlock()
-		return ts, nil
 	}
-	r.mu.Unlock()
 
 	groupExpr := "DATE(timestamp)"
 	if bucket == "hour" {
@@ -135,11 +150,16 @@ func (r *Reader) TimeSeries(ctx context.Context, bucket string, from, to *time.T
 			CASE WHEN SUM(saved_tokens) + SUM(output_tokens) > 0
 				THEN CAST(SUM(saved_tokens) AS REAL) / (SUM(saved_tokens) + SUM(output_tokens)) * 100
 				ELSE 0.0
-			END AS savings_pct
+			END AS savings_pct,
+			COALESCE(SUM(exec_time_ms), 0) AS total_time_ms
 		FROM commands
 		WHERE 1=1
 	`
 	args := []any{}
+	if command != "" {
+		query += " AND original_cmd = ?"
+		args = append(args, command)
+	}
 	if from != nil {
 		query += " AND timestamp >= ?"
 		args = append(args, from.Format(time.RFC3339))
@@ -160,16 +180,94 @@ func (r *Reader) TimeSeries(ctx context.Context, bucket string, from, to *time.T
 	var points []TimePoint
 	for rows.Next() {
 		var p TimePoint
-		if err := rows.Scan(&p.Date, &p.Commands, &p.SavedTokens, &p.SavingsPct); err != nil {
+		if err := rows.Scan(&p.Date, &p.Commands, &p.SavedTokens, &p.SavingsPct, &p.TotalTimeMs); err != nil {
 			continue
 		}
 		points = append(points, p)
 	}
 
-	r.mu.Lock()
-	r.cachedTimeseries = points
-	r.lastFetch = time.Now()
-	r.mu.Unlock()
+	if command == "" {
+		r.mu.Lock()
+		r.cachedTimeseries = points
+		r.lastFetch = time.Now()
+		r.mu.Unlock()
+	}
 
 	return points, nil
+}
+
+func (r *Reader) Commands(ctx context.Context, limit int, date string) ([]CommandStat, error) {
+	if !r.IsAvailable() {
+		return []CommandStat{}, nil
+	}
+
+	// Only cache the all-time (unfiltered) query.
+	if date == "" {
+		r.mu.Lock()
+		if r.cachedCommands != nil && time.Since(r.lastFetch) < r.cacheTTL {
+			cmds := r.cachedCommands
+			r.mu.Unlock()
+			return cmds, nil
+		}
+		r.mu.Unlock()
+	}
+
+	if limit <= 0 {
+		limit = 10
+	}
+
+	query := `
+		SELECT
+			original_cmd,
+			COUNT(*) AS count,
+			COALESCE(SUM(saved_tokens), 0) AS saved_tokens,
+			CASE WHEN SUM(saved_tokens) + SUM(output_tokens) > 0
+				THEN CAST(SUM(saved_tokens) AS REAL) / (SUM(saved_tokens) + SUM(output_tokens)) * 100
+				ELSE 0.0
+			END AS savings_pct,
+			COALESCE(SUM(exec_time_ms), 0) AS total_time_ms
+		FROM commands
+		WHERE 1=1
+	`
+	args := []any{}
+	if date != "" {
+		query += " AND DATE(timestamp) = ?"
+		args = append(args, date)
+	}
+	query += " GROUP BY original_cmd ORDER BY saved_tokens DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		log.Printf("rtkgain: commands query failed: %v", err)
+		return []CommandStat{}, nil
+	}
+	defer rows.Close()
+
+	var totalSaved int64
+	var raw []CommandStat
+	for rows.Next() {
+		var c CommandStat
+		if err := rows.Scan(&c.Command, &c.Count, &c.SavedTokens, &c.SavingsPct, &c.TotalTimeMs); err != nil {
+			continue
+		}
+		totalSaved += c.SavedTokens
+		raw = append(raw, c)
+	}
+
+	for i := range raw {
+		raw[i].Rank = i + 1
+		if totalSaved > 0 {
+			raw[i].ImpactPct = float64(raw[i].SavedTokens) / float64(totalSaved) * 100
+		}
+	}
+
+	if date == "" {
+		r.mu.Lock()
+		r.cachedCommands = raw
+		r.lastFetch = time.Now()
+		r.mu.Unlock()
+	}
+
+	return raw, nil
 }

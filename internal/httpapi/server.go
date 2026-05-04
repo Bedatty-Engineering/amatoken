@@ -65,6 +65,7 @@ func (s *Server) Router() http.Handler {
 
 		r.Get("/rtk/summary", s.handleRTKSummary)
 		r.Get("/rtk/timeseries", s.handleRTKTimeSeries)
+		r.Get("/rtk/commands", s.handleRTKCommands)
 
 		r.Post("/ingest/refresh", s.handleRefresh)
 	})
