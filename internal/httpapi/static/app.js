@@ -45,6 +45,13 @@ function amatoken() {
     ],
     newPricing: { model: '', input_per_mtok_usd: 0, output_per_mtok_usd: 0, cache_write_per_mtok_usd: 0, cache_read_per_mtok_usd: 0 },
     chart: null,
+    rtkChart: null,
+    rtkSummary: null,
+    rtkTimeseries: [],
+    rtkCommands: [],
+    rtkTrend: null,
+    rtkCommandFilter: null,
+    rtkModal: { open: false, title: '', subtitle: '', firstHeader: 'Date', rows: [] },
 
     async init() {
       await this.loadFilterOptions();
@@ -771,6 +778,184 @@ function amatoken() {
           await this.reload();
         },
       );
+    },
+
+    async loadRTK() {
+      // Full reload: fetches summary, unfiltered timeseries, and commands list.
+      // Clears any active command filter.
+      this.rtkCommandFilter = null;
+      const [summary, timeseries, commands] = await Promise.all([
+        fetch('/api/rtk/summary').then(r=>r.json()).catch(() => ({})),
+        fetch('/api/rtk/timeseries?bucket=day').then(r=>r.json()).catch(() => []),
+        fetch('/api/rtk/commands').then(r=>r.json()).catch(() => []),
+      ]);
+      this.rtkSummary = summary;
+      this.rtkCommands = commands || [];
+
+      // Trend from unfiltered data before overwriting rtkTimeseries.
+      const ts = timeseries || [];
+      const recent = ts.slice(-7);
+      const prev   = ts.slice(-14, -7);
+      const sum7 = (arr, k) => arr.reduce((a, p) => a + (p[k] || 0), 0);
+      const pct  = (r, p) => p > 0 ? (r - p) / p * 100 : null;
+      this.rtkTrend = {
+        savedTokens: pct(sum7(recent, 'saved_tokens'), sum7(prev, 'saved_tokens')),
+        commands:    pct(sum7(recent, 'commands'),     sum7(prev, 'commands')),
+        timeMs:      pct(sum7(recent, 'total_time_ms'), sum7(prev, 'total_time_ms')),
+      };
+
+      this.rtkTimeseries = ts;
+      await this.$nextTick();
+      this.renderRTKChart();
+    },
+
+    async filterRTKCommand(cmd) {
+      // Toggle: clicking the active filter clears it.
+      this.rtkCommandFilter = this.rtkCommandFilter === cmd ? null : cmd;
+
+      const url = this.rtkCommandFilter
+        ? `/api/rtk/timeseries?bucket=day&command=${encodeURIComponent(this.rtkCommandFilter)}`
+        : '/api/rtk/timeseries?bucket=day';
+
+      // Only re-fetch timeseries — summary and commands don't change per-command.
+      const timeseries = await fetch(url).then(r=>r.json()).catch(() => []);
+      this.rtkTimeseries = timeseries || [];
+      await this.$nextTick();
+      this.renderRTKChart();
+    },
+
+    openRTKCard(type) {
+      const ts = this.rtkTimeseries;
+      let title, rows;
+      if (type === 'saved') {
+        const total = ts.reduce((a, p) => a + (p.saved_tokens || 0), 0) || 1;
+        title = `Tokens saved: ${this.fmtTokens(this.rtkSummary?.saved_tokens || 0)}`;
+        rows = [...ts].sort((a, b) => b.saved_tokens - a.saved_tokens).map(p => ({
+          label: p.date,
+          value: p.saved_tokens,
+          formatted: this.fmtTokens(p.saved_tokens || 0),
+          pct: (p.saved_tokens || 0) / total * 100,
+        }));
+      } else if (type === 'commands') {
+        const total = ts.reduce((a, p) => a + (p.commands || 0), 0) || 1;
+        title = `Commands intercepted: ${(this.rtkSummary?.total_commands || 0).toLocaleString()}`;
+        rows = [...ts].sort((a, b) => b.commands - a.commands).map(p => ({
+          label: p.date,
+          value: p.commands,
+          formatted: (p.commands || 0).toLocaleString(),
+          pct: (p.commands || 0) / total * 100,
+        }));
+      } else if (type === 'time') {
+        const total = ts.reduce((a, p) => a + (p.total_time_ms || 0), 0) || 1;
+        const fmt = ms => ms >= 60000 ? `${(ms/60000).toFixed(1)}m` : ms >= 1000 ? `${(ms/1000).toFixed(1)}s` : `${ms}ms`;
+        title = `Time saved: ${fmt(this.rtkSummary?.total_time_ms || 0)}`;
+        rows = [...ts].sort((a, b) => b.total_time_ms - a.total_time_ms).map(p => ({
+          label: p.date,
+          value: p.total_time_ms,
+          formatted: fmt(p.total_time_ms || 0),
+          pct: (p.total_time_ms || 0) / total * 100,
+        }));
+      }
+      this.rtkModal = { open: true, title, subtitle: 'Daily breakdown — sorted by highest value', firstHeader: 'Date', rows: rows || [] };
+    },
+
+    closeRTKModal() { this.rtkModal.open = false; },
+
+    async openRTKDayDetail(index) {
+      const p = this.rtkTimeseries[index];
+      if (!p) return;
+      const fmt = ms => ms >= 60000 ? `${(ms/60000).toFixed(1)}m` : ms >= 1000 ? `${(ms/1000).toFixed(1)}s` : `${ms}ms`;
+      const cmds = await fetch(`/api/rtk/commands?date=${encodeURIComponent(p.date)}&limit=10`)
+        .then(r => r.json()).catch(() => []);
+      const totalSaved = cmds.reduce((a, c) => a + (c.saved_tokens || 0), 0) || 1;
+      this.rtkModal = {
+        open: true,
+        title: `${p.date} — ${this.fmtTokens(p.saved_tokens || 0)} saved`,
+        subtitle: `${p.commands} commands · ${(p.savings_pct || 0).toFixed(1)}% efficiency · ${fmt(p.total_time_ms || 0)}`,
+        firstHeader: 'Command',
+        rows: cmds.map(c => ({
+          label: c.command.length > 50 ? c.command.slice(0, 47) + '...' : c.command,
+          value: c.saved_tokens,
+          formatted: this.fmtTokens(c.saved_tokens),
+          pct: c.saved_tokens / totalSaved * 100,
+        })),
+      };
+    },
+
+    // For RTK: going up is GOOD (opposite of cost dashboard).
+    rtkDeltaClass(pct) {
+      if (pct === null || pct === undefined || !isFinite(pct)) return '';
+      return pct > 0 ? 'rtk-up' : pct < 0 ? 'rtk-down' : '';
+    },
+    rtkDeltaText(pct) {
+      if (pct === null || pct === undefined) return '';
+      if (!isFinite(pct)) return 'new';
+      const arrow = pct > 0 ? '▲' : pct < 0 ? '▼' : '·';
+      return `${arrow} ${Math.abs(pct).toFixed(1)}%`;
+    },
+
+    fmtTokens(n) {
+      if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+      if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
+      return n.toString();
+    },
+
+    renderRTKChart() {
+      // Always destroy first so a cleared filter doesn't leave a stale chart.
+      try {
+        if (this.rtkChart) { this.rtkChart.destroy(); }
+      } catch (_) { /* canvas may have been replaced; ignore */ }
+      this.rtkChart = null;
+
+      if (typeof Chart === 'undefined' || !this.rtkTimeseries || this.rtkTimeseries.length === 0) return;
+
+      const ctx = document.getElementById('rtkChart');
+      // Bail if canvas is not visible — offsetParent is null for hidden elements.
+      if (!ctx || ctx.offsetParent === null) return;
+
+      // Close over data so Chart.js tooltip callbacks can access it without `this`.
+      const tsData   = this.rtkTimeseries;
+      const filtered = !!this.rtkCommandFilter;
+      const label    = filtered
+        ? `Tokens saved — ${this.rtkCommandFilter.length > 40 ? this.rtkCommandFilter.slice(0, 37) + '...' : this.rtkCommandFilter}`
+        : 'Tokens saved';
+
+      this.rtkChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: tsData.map(p => p.date),
+          datasets: [{
+            label,
+            data: tsData.map(p => p.saved_tokens || 0),
+            backgroundColor: filtered ? 'rgba(74, 143, 207, 0.6)' : 'rgba(75, 192, 75, 0.6)',
+            borderColor:     filtered ? 'rgba(74, 143, 207, 1)'   : 'rgba(75, 192, 75, 1)',
+            borderWidth: 1,
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          onHover: (_e, elements, chart) => {
+            chart.canvas.style.cursor = elements.length ? 'pointer' : 'default';
+          },
+          onClick: (_e, elements) => {
+            if (!elements.length) return;
+            this.openRTKDayDetail(elements[0].index);
+          },
+          scales: { y: { beginAtZero: true, title: { display: true, text: 'Tokens' } } },
+          plugins: {
+            legend: { display: true },
+            tooltip: {
+              callbacks: {
+                afterLabel(c) {
+                  const p = tsData[c.dataIndex];
+                  return p ? `${(p.savings_pct || 0).toFixed(1)}% efficiency · click for detail` : '';
+                },
+              },
+            },
+          },
+        },
+      });
     },
   };
 }
