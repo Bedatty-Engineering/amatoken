@@ -13,9 +13,10 @@ import (
 
 const (
 	openRouterURL    = "https://openrouter.ai/api/v1/models"
-	openRouterPrefix = "anthropic/"
 	sourceOpenRouter = "openrouter"
 )
+
+var openRouterPrefixes = []string{"anthropic/", "openai/"}
 
 // OpenRouter is a Provider that fetches Anthropic-only models from
 // https://openrouter.ai/api/v1/models. Pricing is published as USD per token
@@ -74,18 +75,24 @@ func (o *OpenRouter) Fetch(ctx context.Context) ([]ModelPrice, error) {
 	now := time.Now().UTC()
 	out := make([]ModelPrice, 0, 32)
 	for _, m := range raw.Data {
-		if !strings.HasPrefix(m.ID, openRouterPrefix) {
+		var prefix string
+		for _, p := range openRouterPrefixes {
+			if strings.HasPrefix(m.ID, p) {
+				prefix = p
+				break
+			}
+		}
+		if prefix == "" {
 			continue
 		}
-		modelID := strings.TrimPrefix(m.ID, openRouterPrefix)
+		modelID := strings.TrimPrefix(m.ID, prefix)
 		// Skip variants like "claude-3.7-sonnet:thinking" — these are
 		// inference modes, not separate billable models for our scope.
 		if strings.Contains(modelID, ":") {
 			continue
 		}
-		// Normalise dot-versioning ("claude-opus-4.7") to dash-versioning
-		// ("claude-opus-4-7") so it matches the model IDs Claude Code writes
-		// into its session JSONL.
+		// Normalise dot-versioning ("claude-opus-4.7" / "gpt-4.1") to
+		// dash-versioning so it matches what Claude Code and Codex write into JSONL.
 		modelID = strings.ReplaceAll(modelID, ".", "-")
 		prompt := parseDollarPerToken(m.Pricing.Prompt)
 		completion := parseDollarPerToken(m.Pricing.Completion)

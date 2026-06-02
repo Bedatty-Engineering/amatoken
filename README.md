@@ -2,10 +2,7 @@
 
 <img src="assets/img/amatoken-logo.png" alt="amatoken" width="120" align="left"/>
 
-Self-hosted observability for **Claude Code** usage. Reads `~/.claude/projects/**/*.jsonl`,
-aggregates tokens and cost by session / project / model, and serves a single-binary
-dashboard. Pricing is pulled from **OpenRouter** automatically — no manual price
-upkeep required.
+Self-hosted observability for Claude Code and Codex usage. Reads Claude Code JSONL from `~/.claude/projects/`, Codex session JSONL from `~/.codex/sessions/` when available, aggregates tokens and cost by session / project / model, and serves a single-binary dashboard. Pricing is pulled from **OpenRouter** automatically — no manual price upkeep required.
 
 <br clear="all"/>
 
@@ -17,12 +14,13 @@ upkeep required.
 |---|---|---|
 | Docker Engine | 20.10+ | `docker --version` |
 | `git` | any | needed by the installer to clone the repo |
-| Claude Code | recent build | the app reads from `~/.claude/projects/`; you need at least one logged session |
+| Claude Code | recent build | Optional but primary source; reads `~/.claude/projects/`. |
+| Codex CLI | recent build | Optional; reads `~/.codex/sessions/` when mounted. |
+| RTK | any | Optional; reads `~/.local/share/rtk/history.db` when mounted. |
 | OS | Linux or macOS | Windows: run inside WSL2 |
 | Free port | 2002 | configurable at install time or via `AMATOKEN_PORT` |
 
-> `~/.claude/projects` is usually mode `700` — the container must run as your UID/GID.
-> The installer and the bundled `docker-compose.yml` already do that for you.
+> Source directories are mounted read-only where possible. The bundled Compose file currently runs the container as root so it can read Claude/Codex session files and the optional RTK database across common host permission layouts. The SQLite app database still lives in the Docker volume `amatoken-db`.
 
 ---
 
@@ -113,7 +111,9 @@ curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/s
 - **Tab-scoped filters** — Dashboard and Sessions keep independent filter state.
 - **Sessions tab** — paginated table with free-text search across project, branch, model and session id; click any row for a drill-down modal with every assistant message and its individual cost.
 - **Multiple named budgets** (calendar-month). Up to 5 pinnable to the dashboard banner.
-- **OpenRouter pricing engine** — Anthropic-only models, periodic auto-sync, strict idempotent CRUD.
+- **OpenRouter pricing engine** — Anthropic and OpenAI model pricing, periodic auto-sync, strict idempotent CRUD.
+- **Codex ingestion** — optional `~/.codex/sessions` scanner for token_count events.
+- **RTK tab** — optional savings telemetry when `~/.local/share/rtk/history.db` is available.
 - **Container resource monitor** in the header — live host CPU %, memory %, Go goroutine count.
 - Confirmation modal on every destructive action.
 
@@ -126,7 +126,6 @@ curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/s
 ```bash
 git clone https://github.com/Bedatty-Engineering/amatoken.git
 cd amatoken
-export AMATOKEN_UID=$(id -u) AMATOKEN_GID=$(id -g)
 docker compose up --build -d
 ```
 
@@ -156,9 +155,13 @@ docker build -t amatoken .
 docker volume create amatoken-db
 
 docker run -d --name amatoken \
-  --user "$(id -u):$(id -g)" \
   -p 2002:2002 \
+  -e CLAUDE_PROJECTS_DIR=/claude-projects \
+  -e CODEX_SESSIONS_DIR=/codex-sessions \
+  -e RTK_DB_PATH=/rtk-data/history.db \
   -v "$HOME/.claude/projects:/claude-projects:ro" \
+  -v "$HOME/.codex/sessions:/codex-sessions:ro" \
+  -v "$HOME/.local/share/rtk:/rtk-data" \
   -v amatoken-db:/data \
   --restart unless-stopped \
   amatoken
@@ -170,6 +173,8 @@ No Docker, hot-iterate on the code:
 
 ```bash
 CLAUDE_PROJECTS_DIR=$HOME/.claude/projects \
+CODEX_SESSIONS_DIR=$HOME/.codex/sessions \
+RTK_DB_PATH=$HOME/.local/share/rtk/history.db \
 DB_PATH=./amatoken.db \
   go run ./cmd/server
 ```
@@ -185,7 +190,10 @@ Environment variables (sensible defaults):
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `CLAUDE_PROJECTS_DIR` | `/claude-projects` | Where the JSONL files live inside the container (set by the volume mount). |
+| `CLAUDE_PROJECTS_DIR` | `/claude-projects` | Claude Code JSONL directory inside the container. |
+| `CODEX_SESSIONS_DIR` | empty | Codex session JSONL directory. Set to `/codex-sessions` by Compose. |
+| `CODEX_MODEL` | `gpt-5.5` | Default Codex model when the session file does not include one; normalized to dash form for pricing. |
+| `RTK_DB_PATH` | empty | Optional RTK history database path. Set to `/rtk-data/history.db` by Compose. |
 | `DB_PATH` | `/data/amatoken.db` | SQLite file path. |
 | `LISTEN_ADDR` | `:2002` | HTTP bind address. |
 | `RECONCILE_INTERVAL` | `60s` | Periodic full re-scan in case fsnotify missed an event. |
@@ -223,7 +231,7 @@ In-app settings (persisted in SQLite, editable from the UI):
 | GET / POST / PUT / DELETE | `/api/budgets` | CRUD for budgets (`PUT` accepts `show_in_dashboard`). |
 | GET / PUT | `/api/settings` | Key/value app settings — `auto_refresh_enabled`, `pricing_auto_sync`. |
 | GET | `/api/resources` | Live container metrics: `cpu_pct_host`, `memory_pct_host`, `memoryMB`, `host_cpu_count`, `host_memory_total_mb`, `goroutines`. |
-| POST | `/api/ingest/refresh` | Force a full reconcile of `CLAUDE_PROJECTS_DIR`. |
+| POST | `/api/ingest/refresh` | Force a full reconcile of the Claude scanner. |
 
 Quick smoke test:
 
@@ -237,11 +245,13 @@ curl localhost:2002/api/pricing/status
 
 ## How ingestion works
 
-- Only lines with `type == "assistant"` and a `message.usage` block become rows. `type=user`, `tool_result`, etc. are ignored — they only contribute to the `input_tokens` of the **next** assistant message.
+- Claude ingestion: only lines with `type == "assistant"` and a `message.usage` block become rows. `type=user`, `tool_result`, etc. are ignored — they only contribute to the `input_tokens` of the **next** assistant message.
 - Synthetic events (`model == "<synthetic>"`) — context compactions, system prompts — are excluded from every aggregation.
 - Dedup is by `message.id` (`INSERT OR IGNORE`).
 - Per-file byte offset is stored in `ingest_state`; container restarts don't re-ingest.
-- `fsnotify` watches every subdir of `CLAUDE_PROJECTS_DIR` (with 500ms debounce). The reconcile tick (default 60s) catches events the watcher missed.
+- `fsnotify` watches every subdir of each configured scanner root with 500ms debounce. The reconcile tick (default 60s) catches events the watcher missed.
+- Codex ingestion is enabled only when `CODEX_SESSIONS_DIR` is set. It reads `session_meta` for cwd/session id and ingests `event_msg` records whose payload type is `token_count`.
+- RTK data is read from `RTK_DB_PATH` when configured; if the database is missing or unreadable, the RTK endpoints return empty/unavailable data and the app continues.
 
 **Project identity = `cwd`, not slug.** Claude Code names project directories after the cwd in which a session *started*, but the cwd inside the JSONL can change as you `cd` around mid-session. amatoken groups by the per-record `cwd` (falling back to project_slug when cwd is missing) so subprojects under the same starting directory show up as distinct rows.
 
@@ -261,7 +271,7 @@ Three source levels with strict priority:
 
 `POST /api/pricing` is **strict** — it refuses to overwrite an existing row (returns `409`). Use `PUT` to edit.
 
-Model-id matching has fallbacks: exact match → strip `-YYYYMMDD` date suffix → walk up `-N` version segments. So `claude-haiku-4-5-20251001` resolves to `claude-haiku-4-5`. OpenRouter's `claude-opus-4.7` is auto-normalised to `claude-opus-4-7`.
+Model-id matching has fallbacks: exact match → strip `-YYYYMMDD` date suffix → walk up `-N` version segments. So `claude-haiku-4-5-20251001` resolves to `claude-haiku-4-5`. OpenRouter IDs such as `claude-opus-4.7` and `openai/gpt-4.1` are auto-normalised to dash-versioned local ids like `claude-opus-4-7` and `gpt-4-1`.
 
 ---
 
@@ -271,9 +281,10 @@ Model-id matching has fallbacks: exact match → strip `-YYYYMMDD` date suffix �
 amatoken/
 ├── cmd/server/main.go          # entrypoint, wiring, graceful shutdown
 ├── internal/
-│   ├── ingest/                 # parser, scanner, fsnotify watcher
+│   ├── ingest/                 # Claude/Codex parsers, scanners, fsnotify watcher
 │   ├── storage/                # SQLite open + migrations + repo (queries)
 │   ├── pricing/                # Provider, OpenRouter, Registry, Calculator
+│   ├── rtkgain/                # optional RTK history reader
 │   ├── seed/                   # First-run example budget + manual pricing
 │   └── httpapi/                # chi router, handlers, embedded static UI
 ├── assets/img/                 # logo, copied into static/ at build time
@@ -283,7 +294,7 @@ amatoken/
 └── README.md
 ```
 
-Stack: **Go 1.23**, **chi**, **modernc.org/sqlite** (pure Go, no CGO), **fsnotify**.
+Stack: **Go 1.23+**, **chi**, **modernc.org/sqlite** (pure Go, no CGO), **fsnotify**.
 Frontend: vanilla **Alpine.js** + **Chart.js** via CDN, served as `go:embed` static
 files. Final image is ~21 MB.
 
@@ -306,13 +317,14 @@ secrets, GPG signing, dry-run instructions).
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `open db: unable to open database file` | Container UID can't write to `/data`. | Use `--user "$(id -u):$(id -g)"` (already in compose). |
-| Dashboard empty despite JSONL existing | Container can't read `~/.claude/projects` (mode 700). | Same fix: run as your host UID. |
+| `open db: unable to open database file` | Container cannot write to `/data`. | Keep the bundled named volume `amatoken-db`, or ensure the mounted DB directory is writable. |
+| Dashboard empty despite JSONL existing | Source directory is missing, mounted at the wrong path, or unreadable. | Check `~/.claude/projects`, `~/.codex/sessions`, Compose volumes, and container logs. |
 | `port is already allocated` | Port 2002 taken. | Re-install with `-p 9090`, or `AMATOKEN_PORT=9090 docker compose up`. |
 | `unknown flag: --build` | Compose v2 plugin missing. | `sudo apt install docker-compose-v2`, or use the plain `docker run` flow. |
 | New session not appearing | fsnotify missed the create. | Click **Refresh now**, wait up to 60s, or `curl -X POST localhost:2002/api/ingest/refresh`. |
-| A model shows `$0.00` cost | No pricing row for that exact id, no fallback matched. | Click **Sync from OpenRouter**, or add the row manually in **Pricing**. |
+| A model shows `$0.00` cost | No pricing row for that exact id, no fallback matched. | Click **Sync from OpenRouter**, or add the row manually in **Pricing**. Check dot/dash model id normalization for Codex models. |
 | OpenRouter sync fails | Rate limit / network blip. | Cached values keep working; the next periodic tick retries. Check `GET /api/pricing/status`. |
+| RTK tab unavailable | `RTK_DB_PATH` is unset, missing, or unreadable. | Mount `~/.local/share/rtk` and verify `/rtk-data/history.db` exists in the container. |
 
 ---
 

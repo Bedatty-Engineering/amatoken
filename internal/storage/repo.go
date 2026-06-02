@@ -47,6 +47,7 @@ type UsageRecord struct {
 	Cwd                 string
 	GitBranch           string
 	Model               string
+	Provider            string // "claude" or "codex"; defaults to "claude" if empty
 	Timestamp           time.Time
 	InputTokens         int64
 	OutputTokens        int64
@@ -57,12 +58,16 @@ type UsageRecord struct {
 }
 
 func (r *Repo) InsertUsage(ctx context.Context, u *UsageRecord) error {
+	provider := u.Provider
+	if provider == "" {
+		provider = "claude"
+	}
 	_, err := r.DB.ExecContext(ctx, `INSERT OR IGNORE INTO usage_records
-		(message_id, request_id, session_id, project_slug, cwd, git_branch, model, ts,
+		(message_id, request_id, session_id, project_slug, cwd, git_branch, model, provider, ts,
 		 input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, source_file, source_line)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		u.MessageID, nullStr(u.RequestID), u.SessionID, u.ProjectSlug, nullStr(u.Cwd), nullStr(u.GitBranch),
-		u.Model, u.Timestamp.UTC().Format(time.RFC3339Nano), u.InputTokens, u.OutputTokens, u.CacheCreationTokens, u.CacheReadTokens,
+		u.Model, provider, u.Timestamp.UTC().Format(time.RFC3339Nano), u.InputTokens, u.OutputTokens, u.CacheCreationTokens, u.CacheReadTokens,
 		u.SourceFile, u.SourceLine)
 	return err
 }

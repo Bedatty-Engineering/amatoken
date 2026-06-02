@@ -14,8 +14,11 @@ services:
       LISTEN_ADDR: ":2002"
       RECONCILE_INTERVAL: 60s
       RTK_DB_PATH: /rtk-data/history.db
+      CODEX_SESSIONS_DIR: /codex-sessions
+      CODEX_MODEL: gpt-5-5
     volumes:
       - ${HOME}/.claude/projects:/claude-projects:ro
+      - ${HOME}/.codex/sessions:/codex-sessions:ro
       - ${HOME}/.local/share/rtk:/rtk-data
       - amatoken-db:/data
     restart: unless-stopped
