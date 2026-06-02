@@ -329,4 +329,4 @@ amatoken is the *measurement* tool — but here's what tends to move the needle:
 
 ## License
 
-© 2026 — All rights reserved. Self-hosted Claude usage monitor.
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
