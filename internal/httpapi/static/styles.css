@@ -215,3 +215,87 @@ th.num, td.num { text-align:right; }
 .rtk-info-tip dl { margin:0; display:grid; grid-template-columns:max-content 1fr; gap:.3rem .7rem; }
 .rtk-info-tip dt { color:var(--accent); font-weight:600; }
 .rtk-info-tip dd { margin:0; }
+
+/* ---------- Responsive ---------- */
+
+/* Tables stay readable on narrow viewports — wrap each in a horizontal scroller */
+table.data { display:table; }
+main, .modal-body { -webkit-overflow-scrolling:touch; }
+
+/* ≤1100px — tablet landscape: tighten paddings, stack rankings */
+@media (max-width: 1100px) {
+  .rankings-grid { grid-template-columns:1fr; }
+  header { gap:1rem; padding:.9rem 1.25rem; }
+  main { padding:1.25rem; }
+  .search-input input { min-width:240px; }
+  .resource-tooltip { width:320px; }
+  .action-group.has-tooltip .nav-tooltip { width:340px; }
+}
+
+/* ≤900px — tablet portrait: header wraps, header-resources to its own row */
+@media (max-width: 900px) {
+  header { flex-wrap:wrap; row-gap:.75rem; }
+  nav { flex-wrap:wrap; gap:.35rem; }
+  nav button { padding:.35rem .6rem; font-size:.85rem; }
+  .header-resources { margin-left:0; order:3; flex-basis:100%; justify-content:flex-start; }
+  .resource-tooltip { left:0; right:auto; width:min(380px, calc(100vw - 2rem)); }
+  .action-group.has-tooltip .nav-tooltip { width:min(420px, calc(100vw - 2rem)); }
+  .filters { padding:.85rem 1.25rem; gap:.75rem; }
+  .budget-bar-inner { flex-wrap:wrap; }
+  .budget-meta { margin-left:0; }
+  table.data, table.data thead, table.data tbody, table.data tr { display:revert; }
+  /* Make wide tables scroll horizontally inside their containers */
+  main > table.data, .modal-body > table.data { display:block; overflow-x:auto; }
+  .ellipsis { max-width:200px; }
+  .ellipsis-row { max-width:220px; }
+}
+
+/* ≤640px — mobile: single-column cards, compact nav, edge-to-edge modals */
+@media (max-width: 640px) {
+  body { font-size:13px; }
+  header { padding:.75rem 1rem; gap:.6rem; }
+  .brand { gap:.6rem; }
+  .logo { width:34px; height:34px; }
+  h1 { font-size:1.05rem; }
+  nav { width:100%; justify-content:flex-start; }
+  nav button { flex:1 1 auto; min-width:0; }
+  .action-group.has-tooltip { flex-basis:100%; justify-content:space-between; }
+  .action-group.has-tooltip .nav-tooltip { left:0; right:0; width:auto; }
+  .header-resources { font-size:.72rem; gap:.35rem; padding:.25rem .4rem; flex-wrap:wrap; }
+  .filters { flex-direction:column; align-items:stretch; padding:.75rem 1rem; }
+  .filters label, .filters .custom-range { width:100%; }
+  .custom-range { flex-direction:column; gap:.5rem; align-items:stretch; }
+  main { padding:1rem .85rem; }
+  .cards { grid-template-columns:1fr 1fr; gap:.75rem; }
+  .card { padding:.8rem; }
+  .card strong { font-size:1.15rem; }
+  .chart-wrap { height:300px; padding:.6rem; }
+  .toolbar { flex-wrap:wrap; }
+  .toolbar .status { margin-left:0; flex-basis:100%; }
+  .search-input { width:100%; }
+  .search-input input { min-width:0; width:100%; }
+  /* Tables — convert to scrollable cards in remaining wide views */
+  main > table.data, .modal-body > table.data { font-size:.82rem; }
+  table.data th, table.data td { padding:.4rem .5rem; }
+  table.data input { width:80px; }
+  .pager { justify-content:center; }
+  .pager .meta { flex-basis:100%; text-align:center; margin-left:0; }
+  .modal-backdrop { padding:.5rem; }
+  .modal { max-height:92vh; border-radius:10px; }
+  .modal-header { padding:.75rem .9rem; gap:.5rem; }
+  .modal-body { padding:.75rem .9rem; }
+  .modal-sub .dot { display:inline; }
+  .savings-section { padding:1rem; }
+  .share-bar { width:80px; }
+  .impact-bar-wrap { width:80px; }
+  .cmd-cell { max-width:160px; font-size:.78rem; }
+  footer { padding:1rem; flex-direction:column; align-items:flex-start; gap:.25rem; }
+  footer .dot { display:none; }
+}
+
+/* ≤420px — very narrow mobile: single-column cards */
+@media (max-width: 420px) {
+  .cards { grid-template-columns:1fr; }
+  nav button { font-size:.8rem; padding:.3rem .5rem; }
+  h1 { font-size:.95rem; }
+}
