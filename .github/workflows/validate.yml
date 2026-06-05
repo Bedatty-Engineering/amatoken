@@ -18,7 +18,7 @@ permissions:
 jobs:
   base:
     name: Base validation
-    uses: Bedatty-Engineering/modules-hub/.github/workflows/validate.yml@1.4.1
+    uses: Bedatty-Engineering/modules-hub/.github/workflows/validate.yml@v1.4.1
     secrets: inherit
     with:
       is_pull_request: ${{ github.event_name == 'pull_request' }}
