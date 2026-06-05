@@ -15,7 +15,7 @@ jobs:
     # semantic-release pushes a CHANGELOG commit with [skip ci]; this guard
     # prevents the release job from re-firing on its own commit.
     if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
-    uses: Bedatty-Engineering/modules-hub/.github/workflows/release.yml@stable
+    uses: Bedatty-Engineering/modules-hub/.github/workflows/release.yml@1.4.1
     with:
       ref: ${{ github.ref_name }}
     secrets:

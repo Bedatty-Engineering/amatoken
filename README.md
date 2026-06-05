@@ -292,7 +292,7 @@ files. Final image is ~21 MB.
 ## Releases
 
 amatoken uses [semantic-release](https://semantic-release.gitbook.io/) wired
-through [`Bedatty-Engineering/modules-hub@stable`](https://github.com/Bedatty-Engineering/modules-hub).
+through [`Bedatty-Engineering/modules-hub@1.4.1`](https://github.com/Bedatty-Engineering/modules-hub).
 Versions are derived from Conventional Commits; the tag-triggered build workflow publishes binaries for
 `linux/{amd64,arm64}` and `darwin/{amd64,arm64}` to each GitHub Release and pushes a multi-arch image to
 `ghcr.io/Bedatty-Engineering/amatoken`. Branch model: `main` → `latest` (stable), `dev` → `alpha` prereleases.
