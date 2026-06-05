@@ -303,10 +303,11 @@ files. Final image is ~21 MB.
 ## Releases
 
 amatoken uses [semantic-release](https://semantic-release.gitbook.io/) wired
-through [`Bedatty-Engineering/modules-hub@v1`](https://github.com/Bedatty-Engineering/modules-hub).
-Versions are derived from Conventional Commits; binaries for
-`linux/{amd64,arm64}` and `darwin/{amd64,arm64}` are attached to each GitHub
-Release. Branch model: `main` → `latest` (stable), `dev` → `alpha` prereleases.
+through [`Bedatty-Engineering/modules-hub@stable`](https://github.com/Bedatty-Engineering/modules-hub).
+Versions are derived from Conventional Commits; the tag-triggered build workflow publishes binaries for
+`linux/{amd64,arm64}` and `darwin/{amd64,arm64}` to each GitHub Release and pushes a multi-arch image to
+`ghcr.io/Bedatty-Engineering/amatoken`. Branch model: `main` → `latest` (stable), `dev` → `alpha` prereleases.
+PR and workflow hygiene validation also runs through the reusable `modules-hub` validation workflow on PRs to `main` / `dev` and pushes to `main`.
 
 See **[`docs/RELEASE.md`](docs/RELEASE.md)** for the full setup (required
 secrets, GPG signing, dry-run instructions).

@@ -2,7 +2,7 @@
 
 amatoken uses [semantic-release](https://semantic-release.gitbook.io/) wired
 through the reusable workflow at
-[`Bedatty-Engineering/modules-hub@v1`](https://github.com/Bedatty-Engineering/modules-hub).
+[`Bedatty-Engineering/modules-hub@stable`](https://github.com/Bedatty-Engineering/modules-hub).
 Versions and changelogs come from **Conventional Commits**; binaries are built
 in a follow-up workflow and attached to the GitHub Release.
 
@@ -36,8 +36,9 @@ Use `feat(scope): …` to give the changelog a section.
 |---|---|
 | `.releaserc.json` | semantic-release config (branches, plugins). |
 | `package.json` + `package-lock.json` | semantic-release toolchain (devDeps only — not shipped). |
-| `.github/workflows/release.yml` | Caller — invokes `modules-hub@v1` on push to `main` / `dev`. |
-| `.github/workflows/binaries.yml` | Triggers on `v*.*.*` tag push, builds `linux/darwin × amd64/arm64` and uploads to the release. |
+| `.github/workflows/validate.yml` | Caller — invokes `modules-hub` PR/push validation for hygiene and workflow checks. |
+| `.github/workflows/release.yml` | Caller — invokes `modules-hub@stable` on push to `main` / `dev`. |
+| `.github/workflows/build.yml` | Triggers on `v*.*.*` tag push, builds release binaries, uploads them to the GitHub Release, and pushes the Docker image to GHCR. |
 | `CHANGELOG.md` | Generated and committed by semantic-release. |
 
 ## One-time setup (repo admin)
@@ -111,15 +112,16 @@ the protected paths. Otherwise the post-release commit will be rejected.
 ## How a release happens
 
 1. PR is merged to `dev` or `main`.
-2. `release.yml` triggers, calls `modules-hub@v1`:
+2. `release.yml` triggers, calls `modules-hub@stable`:
    - checks out with full history
    - imports the GPG key
    - runs `npx semantic-release` against the triggering branch
    - on `main`, moves the floating `v<major>` tag to the new stable
 3. semantic-release tags `vX.Y.Z` (or `vX.Y.Z-alpha.N`) and pushes it.
-4. The tag push triggers `binaries.yml`, which builds for
-   `linux/{amd64,arm64}` and `darwin/{amd64,arm64}` and uploads
-   `amatoken-<os>-<arch>` + `amatoken-<os>-<arch>.sha256` to the release.
+4. The tag push triggers `build.yml`, which:
+   - builds for `linux/{amd64,arm64}` and `darwin/{amd64,arm64}`
+   - uploads `amatoken-<os>-<arch>` + `amatoken-<os>-<arch>.sha256` to the release
+   - builds and pushes a multi-arch image to `ghcr.io/Bedatty-Engineering/amatoken`
 
 ## Local sanity check (no publish)
 
