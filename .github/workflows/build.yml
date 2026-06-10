@@ -67,7 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           OUT="amatoken-${GOOS}-${GOARCH}"
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if gh release view "$TAG" >/dev/null 2>&1; then
               break
             fi
