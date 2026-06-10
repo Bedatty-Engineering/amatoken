@@ -36,7 +36,7 @@ Use `feat(scope): …` to give the changelog a section.
 |---|---|
 | `.releaserc.json` | semantic-release config (branches, plugins). |
 | `package.json` + `package-lock.json` | semantic-release toolchain (devDeps only — not shipped). |
-| `.github/workflows/validate.yml` | Product validation — runs `go test ./...` and `docker build` on PRs to `main` / `dev` and pushes to `main`. |
+| `.github/workflows/validate.yml` | Caller — invokes `modules-hub` PR/push validation for hygiene and workflow checks. |
 | `.github/workflows/release.yml` | Caller — invokes `modules-hub@v1.4.1` on push to `main` / `dev`. |
 | `.github/workflows/build.yml` | Triggers on `v*.*.*` tag push, builds release binaries, uploads them to the GitHub Release, and pushes the Docker image to GHCR. |
 | `CHANGELOG.md` | Generated and committed by semantic-release. |

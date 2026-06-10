@@ -9,30 +9,19 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
+  issues: write
+  security-events: write
+  packages: read
+  actions: read
 
 jobs:
-  test:
-    name: Go test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Run tests
-        run: go test ./...
-
-  docker-build:
-    name: Docker build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Build image
-        run: docker build -t amatoken:ci .
+  base:
+    name: Base validation
+    uses: Bedatty-Engineering/modules-hub/.github/workflows/validate.yml@v1.4.1
+    secrets: inherit
+    with:
+      is_pull_request: ${{ github.event_name == 'pull_request' }}
+      enforce_source_branches: true
+      allowed_source_branches: "dev|hotfix/*"
+      target_branches_for_source_check: "main"
