@@ -38,7 +38,7 @@ Use `feat(scope): …` to give the changelog a section.
 | `package.json` + `package-lock.json` | semantic-release toolchain (devDeps only — not shipped). |
 | `.github/workflows/validate.yml` | Caller — invokes `modules-hub` PR/push validation for hygiene and workflow checks. |
 | `.github/workflows/release.yml` | Caller — invokes `modules-hub@v1.4.1` on push to `main` / `dev`. |
-| `.github/workflows/build.yml` | Triggers on `v*.*.*` tag push, builds release binaries, uploads them to the GitHub Release, and pushes the Docker image to GHCR. |
+| `.github/workflows/build.yml` | Triggers when a GitHub Release is published, checks out the release tag, builds binaries, uploads them to the GitHub Release, and pushes the Docker image to GHCR. |
 | `CHANGELOG.md` | Generated and committed by semantic-release. |
 
 ## One-time setup (repo admin)
@@ -118,7 +118,7 @@ the protected paths. Otherwise the post-release commit will be rejected.
    - runs `npx semantic-release` against the triggering branch
    - on `main`, moves the floating `v<major>` tag to the new stable
 3. semantic-release tags `vX.Y.Z` (or `vX.Y.Z-alpha.N`) and pushes it.
-4. The tag push triggers `build.yml`, which:
+4. Publishing the GitHub Release triggers `build.yml` after the tag already exists, and it:
    - builds for `linux/{amd64,arm64}` and `darwin/{amd64,arm64}`
    - uploads `amatoken-<os>-<arch>` + `amatoken-<os>-<arch>.sha256` to the release
    - builds and pushes a multi-arch image to `ghcr.io/Bedatty-Engineering/amatoken`
