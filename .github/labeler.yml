@@ -1,0 +1,13 @@
+documentation:
+  - "**/*.md"
+  - "docs/**"
+
+dependencies:
+  - "go.mod"
+  - "go.sum"
+  - "package.json"
+  - "package-lock.json"
+
+go:
+  - "cmd/**/*.go"
+  - "internal/**/*.go"
