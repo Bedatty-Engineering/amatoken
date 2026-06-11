@@ -25,3 +25,4 @@ jobs:
       enforce_source_branches: true
       allowed_source_branches: "dev|hotfix/*"
       target_branches_for_source_check: "main"
+      enable_auto_labeler: true
