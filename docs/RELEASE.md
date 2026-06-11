@@ -2,7 +2,7 @@
 
 amatoken uses [semantic-release](https://semantic-release.gitbook.io/) wired
 through the reusable workflow at
-[`Bedatty-Engineering/modules-hub@v1.4.1`](https://github.com/Bedatty-Engineering/modules-hub).
+[`Bedatty-Engineering/modules-hub@v1.4.2`](https://github.com/Bedatty-Engineering/modules-hub).
 Versions and changelogs come from **Conventional Commits**; binaries are built
 in a follow-up workflow and attached to the GitHub Release.
 
@@ -37,7 +37,7 @@ Use `feat(scope): …` to give the changelog a section.
 | `.releaserc.json` | semantic-release config (branches, plugins). |
 | `package.json` + `package-lock.json` | semantic-release toolchain (devDeps only — not shipped). |
 | `.github/workflows/validate.yml` | Caller — invokes `modules-hub` PR/push validation for hygiene and workflow checks. |
-| `.github/workflows/release.yml` | Caller — invokes `modules-hub@v1.4.1` on push to `main` / `dev`. |
+| `.github/workflows/release.yml` | Caller — invokes `modules-hub@v1.4.2` on push to `main` / `dev`. |
 | `.github/workflows/build.yml` | Triggers when a GitHub Release is published, checks out the release tag, builds binaries, uploads them to the GitHub Release, and pushes the Docker image to GHCR. |
 | `CHANGELOG.md` | Generated and committed by semantic-release. |
 
@@ -112,7 +112,7 @@ the protected paths. Otherwise the post-release commit will be rejected.
 ## How a release happens
 
 1. PR is merged to `dev` or `main`.
-2. `release.yml` triggers, calls `modules-hub@v1.4.1`:
+2. `release.yml` triggers, calls `modules-hub@v1.4.2`:
    - checks out with full history
    - imports the GPG key
    - runs `npx semantic-release` against the triggering branch
