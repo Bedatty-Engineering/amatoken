@@ -1,3 +1,9 @@
+## [1.0.0-alpha.2](https://github.com/Bedatty-Engineering/amatoken/compare/v1.0.0-alpha.1...v1.0.0-alpha.2) (2026-06-11)
+
+### Features
+
+* **usage:** add codex ingestion and integration tests ([9ea9dbb](https://github.com/Bedatty-Engineering/amatoken/commit/9ea9dbb820f5bf49e4dac3bfa0284ca428e7a425))
+
 ## 1.0.0-alpha.1 (2026-06-10)
 
 ### Features
