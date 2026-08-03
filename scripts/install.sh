@@ -107,11 +107,8 @@ ok "Source ready"
 cd "$INSTALL_DIR"
 
 # --- build & run ---------------------------------------------------------
-# docker-compose.yml reads AMATOKEN_PORT, AMATOKEN_UID and AMATOKEN_GID.
-# (UID is readonly in bash, so we use namespaced env vars instead.)
+# docker-compose.yml reads AMATOKEN_PORT.
 export AMATOKEN_PORT="$PORT"
-export AMATOKEN_UID="$(id -u)"
-export AMATOKEN_GID="$(id -g)"
 info "Host port → $PORT (container listens on 2002)"
 
 if [ -n "$COMPOSE" ]; then
@@ -124,10 +121,12 @@ else
   docker rm -f amatoken >/dev/null 2>&1 || true
   info "Starting container"
   docker run -d --name amatoken \
-    --user "$(id -u):$(id -g)" \
+    --user "0:0" \
     -p "${PORT}:2002" \
     -v "$HOME/.claude/projects:/claude-projects:ro" \
+    -v "$HOME/.local/share/rtk:/rtk-data" \
     -v amatoken-db:/data \
+    -e RTK_DB_PATH=/rtk-data/history.db \
     --restart unless-stopped \
     amatoken
 fi

@@ -17,12 +17,14 @@ upkeep required.
 |---|---|---|
 | Docker Engine | 20.10+ | `docker --version` |
 | `git` | any | needed by the installer to clone the repo |
+| `curl` + `bash` | any | required for the one-line installer |
 | Claude Code | recent build | the app reads from `~/.claude/projects/`; you need at least one logged session |
+| RTK | optional | if `~/.local/share/rtk/history.db` exists, amatoken enables the RTK section automatically |
 | OS | Linux or macOS | Windows: run inside WSL2 |
 | Free port | 2002 | configurable at install time or via `AMATOKEN_PORT` |
 
-> `~/.claude/projects` is usually mode `700` — the container must run as your UID/GID.
-> The installer and the bundled `docker-compose.yml` already do that for you.
+> `~/.claude/projects` is usually mode `700`, and some RTK setups also require elevated file access.
+> The installer and the bundled runtime start the container as `root` inside Docker so both data sources stay readable across machines.
 
 ---
 
@@ -63,6 +65,8 @@ After install:
 curl localhost:2002/healthz             # → ok
 xdg-open http://localhost:2002          # or: open http://localhost:2002
 ```
+
+If RTK is not installed on that machine, amatoken still works normally for Claude usage data; only the RTK section stays unavailable.
 
 ### Update
 
@@ -126,7 +130,6 @@ curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/s
 ```bash
 git clone https://github.com/Bedatty-Engineering/amatoken.git
 cd amatoken
-export AMATOKEN_UID=$(id -u) AMATOKEN_GID=$(id -g)
 docker compose up --build -d
 ```
 
@@ -156,10 +159,12 @@ docker build -t amatoken .
 docker volume create amatoken-db
 
 docker run -d --name amatoken \
-  --user "$(id -u):$(id -g)" \
+  --user "0:0" \
   -p 2002:2002 \
   -v "$HOME/.claude/projects:/claude-projects:ro" \
+  -v "$HOME/.local/share/rtk:/rtk-data" \
   -v amatoken-db:/data \
+  -e RTK_DB_PATH=/rtk-data/history.db \
   --restart unless-stopped \
   amatoken
 ```
@@ -190,6 +195,7 @@ Environment variables (sensible defaults):
 | `LISTEN_ADDR` | `:2002` | HTTP bind address. |
 | `RECONCILE_INTERVAL` | `60s` | Periodic full re-scan in case fsnotify missed an event. |
 | `PRICING_SYNC_INTERVAL` | `12h` | OpenRouter auto-sync cadence (only runs while the toggle is on). |
+| `RTK_DB_PATH` | `/rtk-data/history.db` | Optional RTK SQLite database; when readable, the RTK section is enabled automatically. |
 | `AMATOKEN_PORT` | `2002` | Host-side port mapping (read by `docker-compose.yml`). |
 
 In-app settings (persisted in SQLite, editable from the UI):
