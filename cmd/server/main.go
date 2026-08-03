@@ -65,6 +65,19 @@ func main() {
 		}
 	}()
 
+	codexRoot := env("CODEX_SESSIONS_DIR", "")
+	if codexRoot != "" {
+		codexModel := env("CODEX_MODEL", "gpt-5.5")
+		codexScanner := ingest.NewCodexScanner(repo, codexRoot, codexModel)
+		codexWatcher := ingest.NewWatcher(codexScanner, interval)
+		go func() {
+			if err := codexWatcher.Run(ctx); err != nil && err != context.Canceled {
+				log.Printf("codex watcher: %v", err)
+			}
+		}()
+		log.Printf("codex: watching %s (model=%s)", codexRoot, codexModel)
+	}
+
 	registry := pricing.NewRegistry(repo, pricing.NewOpenRouter(), pricingInterval)
 	go registry.Run(ctx)
 

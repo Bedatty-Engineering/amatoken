@@ -11,13 +11,20 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-type Watcher struct {
-	Scanner            *Scanner
-	ReconcileInterval  time.Duration
-	debounce           time.Duration
+// Scannable is implemented by both Scanner (Claude) and CodexScanner.
+type Scannable interface {
+	ScanAll(ctx context.Context) error
+	ProcessFile(ctx context.Context, path string) error
+	GetRoot() string
 }
 
-func NewWatcher(s *Scanner, interval time.Duration) *Watcher {
+type Watcher struct {
+	Scanner           Scannable
+	ReconcileInterval time.Duration
+	debounce          time.Duration
+}
+
+func NewWatcher(s Scannable, interval time.Duration) *Watcher {
 	return &Watcher{Scanner: s, ReconcileInterval: interval, debounce: 500 * time.Millisecond}
 }
 
@@ -32,7 +39,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 	}
 	defer fw.Close()
 
-	w.addDirs(fw, w.Scanner.Root)
+	w.addDirs(fw, w.Scanner.GetRoot())
 
 	ticker := time.NewTicker(w.ReconcileInterval)
 	defer ticker.Stop()

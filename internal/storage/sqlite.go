@@ -32,6 +32,9 @@ func Open(path string) (*sql.DB, error) {
 	if err := migrateAdd(db, "budgets", "show_in_dashboard", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return nil, err
 	}
+	if err := migrateAdd(db, "usage_records", "provider", "TEXT NOT NULL DEFAULT 'claude'"); err != nil {
+		return nil, err
+	}
 	return db, nil
 }
 

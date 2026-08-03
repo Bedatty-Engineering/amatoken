@@ -15,7 +15,7 @@ const SourceManual = "manual"
 // Manual entries (created/edited via UI) are never overwritten by sync —
 // only rows with source != "manual" or missing rows are replaced.
 type Registry struct {
-	Repo     *storage.Repo
+	Repo     RegistryStore
 	Provider Provider
 	Interval time.Duration
 
@@ -25,7 +25,7 @@ type Registry struct {
 	lastCount  int
 }
 
-func NewRegistry(repo *storage.Repo, p Provider, interval time.Duration) *Registry {
+func NewRegistry(repo RegistryStore, p Provider, interval time.Duration) *Registry {
 	return &Registry{Repo: repo, Provider: p, Interval: interval}
 }
 

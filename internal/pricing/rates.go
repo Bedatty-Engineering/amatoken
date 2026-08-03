@@ -14,6 +14,7 @@ import (
 const SourceSeed = "seed"
 
 var DefaultRates = []storage.Pricing{
+	// Anthropic / Claude Code
 	{Model: "claude-opus-4-7", InputPerMTokUSD: 15, OutputPerMTokUSD: 75, CacheWritePerMTokUSD: 18.75, CacheReadPerMTokUSD: 1.5},
 	{Model: "claude-opus-4-6", InputPerMTokUSD: 15, OutputPerMTokUSD: 75, CacheWritePerMTokUSD: 18.75, CacheReadPerMTokUSD: 1.5},
 	{Model: "claude-opus-4-5", InputPerMTokUSD: 15, OutputPerMTokUSD: 75, CacheWritePerMTokUSD: 18.75, CacheReadPerMTokUSD: 1.5},
@@ -22,9 +23,18 @@ var DefaultRates = []storage.Pricing{
 	{Model: "claude-sonnet-4-5", InputPerMTokUSD: 3, OutputPerMTokUSD: 15, CacheWritePerMTokUSD: 3.75, CacheReadPerMTokUSD: 0.3},
 	{Model: "claude-sonnet-4", InputPerMTokUSD: 3, OutputPerMTokUSD: 15, CacheWritePerMTokUSD: 3.75, CacheReadPerMTokUSD: 0.3},
 	{Model: "claude-haiku-4-5", InputPerMTokUSD: 1, OutputPerMTokUSD: 5, CacheWritePerMTokUSD: 1.25, CacheReadPerMTokUSD: 0.1},
+
+	// OpenAI / Codex — seed values; verify at platform.openai.com/pricing and update via the Pricing UI.
+	{Model: "gpt-5-5", InputPerMTokUSD: 10, OutputPerMTokUSD: 40, CacheWritePerMTokUSD: 0, CacheReadPerMTokUSD: 2.5},
+	{Model: "gpt-5", InputPerMTokUSD: 10, OutputPerMTokUSD: 40, CacheWritePerMTokUSD: 0, CacheReadPerMTokUSD: 2.5},
+	{Model: "gpt-4-1", InputPerMTokUSD: 2, OutputPerMTokUSD: 8, CacheWritePerMTokUSD: 0, CacheReadPerMTokUSD: 0.5},
+	{Model: "gpt-4-1-mini", InputPerMTokUSD: 0.4, OutputPerMTokUSD: 1.6, CacheWritePerMTokUSD: 0, CacheReadPerMTokUSD: 0.1},
+	{Model: "gpt-4o", InputPerMTokUSD: 5, OutputPerMTokUSD: 15, CacheWritePerMTokUSD: 0, CacheReadPerMTokUSD: 2.5},
+	{Model: "o3", InputPerMTokUSD: 10, OutputPerMTokUSD: 40, CacheWritePerMTokUSD: 0, CacheReadPerMTokUSD: 2.5},
+	{Model: "o4-mini", InputPerMTokUSD: 1.1, OutputPerMTokUSD: 4.4, CacheWritePerMTokUSD: 0, CacheReadPerMTokUSD: 0.275},
 }
 
-func SeedDefaults(ctx context.Context, repo *storage.Repo) error {
+func SeedDefaults(ctx context.Context, repo Store) error {
 	existing, err := repo.ListPricing(ctx)
 	if err != nil {
 		return err
