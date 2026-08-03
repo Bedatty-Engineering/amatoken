@@ -62,6 +62,8 @@ curl localhost:2002/healthz             # → ok
 xdg-open http://localhost:2002          # or: open http://localhost:2002
 ```
 
+If RTK is not installed on that machine, amatoken still works normally for Claude usage data; only the RTK section stays unavailable.
+
 ### Update
 
 Pulls the latest code, rebuilds the image and restarts. Data volume is preserved.
@@ -163,6 +165,7 @@ docker run -d --name amatoken \
   -v "$HOME/.codex/sessions:/codex-sessions:ro" \
   -v "$HOME/.local/share/rtk:/rtk-data" \
   -v amatoken-db:/data \
+  -e RTK_DB_PATH=/rtk-data/history.db \
   --restart unless-stopped \
   amatoken
 ```
@@ -198,6 +201,7 @@ Environment variables (sensible defaults):
 | `LISTEN_ADDR` | `:2002` | HTTP bind address. |
 | `RECONCILE_INTERVAL` | `60s` | Periodic full re-scan in case fsnotify missed an event. |
 | `PRICING_SYNC_INTERVAL` | `12h` | OpenRouter auto-sync cadence (only runs while the toggle is on). |
+| `RTK_DB_PATH` | `/rtk-data/history.db` | Optional RTK SQLite database; when readable, the RTK section is enabled automatically. |
 | `AMATOKEN_PORT` | `2002` | Host-side port mapping (read by `docker-compose.yml`). |
 
 In-app settings (persisted in SQLite, editable from the UI):
@@ -303,7 +307,7 @@ files. Final image is ~21 MB.
 ## Releases
 
 amatoken uses [semantic-release](https://semantic-release.gitbook.io/) wired
-through [`Bedatty-Engineering/modules-hub@v1.4.1`](https://github.com/Bedatty-Engineering/modules-hub).
+through [`Bedatty-Engineering/modules-hub@v1.4.2`](https://github.com/Bedatty-Engineering/modules-hub).
 Versions are derived from Conventional Commits; the tag-triggered build workflow publishes binaries for
 `linux/{amd64,arm64}` and `darwin/{amd64,arm64}` to each GitHub Release and pushes a multi-arch image to
 `ghcr.io/Bedatty-Engineering/amatoken`. Branch model: `main` → `latest` (stable), `dev` → `alpha` prereleases.

@@ -82,9 +82,6 @@ confirm "Rebuild and restart container?" || die "aborted"
 echo
 
 # --- rebuild & restart ---------------------------------------------------
-export AMATOKEN_UID="$(id -u)"
-export AMATOKEN_GID="$(id -g)"
-
 if [ -n "$COMPOSE" ]; then
   info "Rebuilding & restarting via $COMPOSE"
   $COMPOSE up --build -d
@@ -96,11 +93,12 @@ else
   docker rm -f amatoken >/dev/null 2>&1 || true
   info "Starting container on port $PORT"
   docker run -d --name amatoken \
-    --user "$(id -u):$(id -g)" \
+    --user "0:0" \
     -p "${PORT}:2002" \
     -v "$HOME/.claude/projects:/claude-projects:ro" \
-    -v "${HOME}/.local/share/rtk:/rtk-data:ro" \
+    -v "${HOME}/.local/share/rtk:/rtk-data" \
     -v amatoken-db:/data \
+    -e RTK_DB_PATH=/rtk-data/history.db \
     --restart unless-stopped \
     amatoken
 fi
