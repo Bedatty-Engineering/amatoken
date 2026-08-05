@@ -54,3 +54,13 @@ func SeedDefaults(ctx context.Context, repo Store) error {
 	}
 	return nil
 }
+
+func DefaultRateForModel(model string) (storage.Pricing, bool) {
+	for _, p := range DefaultRates {
+		if p.Model == model {
+			p.Source = SourceSeed
+			return p, true
+		}
+	}
+	return storage.Pricing{}, false
+}

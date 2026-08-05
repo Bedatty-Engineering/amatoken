@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/bedatty/amatoken/internal/ingest"
 	"github.com/bedatty/amatoken/internal/pricing"
 	"github.com/bedatty/amatoken/internal/rtkgain"
 	"github.com/bedatty/amatoken/internal/storage"
@@ -18,85 +19,46 @@ import (
 //go:embed static
 var staticFS embed.FS
 
-type Server struct {
-	Repo            Store
-	Scanner         Scanner
-	PricingRegistry PricingRegistry
-	RTKReader       RTKReader
-}
-
-type PricingStore interface {
-	ListPricing(ctx context.Context) ([]storage.Pricing, error)
-	UpsertPricing(ctx context.Context, p storage.Pricing) error
-	DeletePricing(ctx context.Context, model string) error
-}
-
-type UsageStore interface {
-	Summary(ctx context.Context, f storage.Filters) (storage.Summary, error)
-	TotalsByModel(ctx context.Context, f storage.Filters) ([]storage.ModelTotals, error)
-	TimeSeries(ctx context.Context, f storage.Filters, bucket string) ([]storage.TimePoint, error)
-	TimeSeriesByModel(ctx context.Context, f storage.Filters, bucket string) ([]storage.TimeSeriesByModelPoint, error)
-	DistinctProjects(ctx context.Context) ([]string, error)
-	DistinctModels(ctx context.Context) ([]string, error)
-	DeleteRecord(ctx context.Context, id int64) error
-}
-
-type SessionStore interface {
-	CountSessions(ctx context.Context, f storage.Filters) (int64, error)
-	ListSessions(ctx context.Context, f storage.Filters, limit, offset int) ([]storage.SessionRow, error)
-	SessionModelBreakdown(ctx context.Context, f storage.Filters, sessionIDs []string) ([]storage.SessionModelBreakdown, error)
-	ListSessionRecords(ctx context.Context, sessionID string) ([]storage.SessionRecord, error)
-}
-
-type BudgetStore interface {
-	ListBudgets(ctx context.Context) ([]storage.Budget, error)
-	CreateBudget(ctx context.Context, name string, amount float64) (*storage.Budget, error)
-	UpdateBudget(ctx context.Context, id int64, name string, amount float64, show bool) error
-	DeleteBudget(ctx context.Context, id int64) error
-}
-
-type SettingsStore interface {
-	ListSettings(ctx context.Context) (map[string]string, error)
-	UpsertSetting(ctx context.Context, key, value string) error
-}
-
-type RankingStore interface {
-	TotalsByProjectModel(ctx context.Context, f storage.Filters) ([]storage.ProjectModelTotals, error)
-	SessionsByProject(ctx context.Context, f storage.Filters) (map[string]int64, error)
-}
-
-type Store interface {
-	PricingStore
-	UsageStore
-	SessionStore
-	BudgetStore
-	SettingsStore
-	RankingStore
-}
-
-type Scanner interface {
-	ScanAll(ctx context.Context) error
-}
-
-type PricingRegistry interface {
-	Sync(ctx context.Context) (*pricing.SyncResult, error)
-	Status() pricing.Status
-}
-
 type RTKReader interface {
-	Summary(ctx context.Context) (*rtkgain.Summary, error)
-	Commands(ctx context.Context, limit int, date string) ([]rtkgain.CommandStat, error)
+	Summary(ctx context.Context, from, to *time.Time) (*rtkgain.Summary, error)
+	Commands(ctx context.Context, limit int, date string, from, to *time.Time) ([]rtkgain.CommandStat, error)
 	TimeSeries(ctx context.Context, bucket string, from, to *time.Time, command string) ([]rtkgain.TimePoint, error)
 }
 
-func New(repo Store, scanner Scanner, registry PricingRegistry, rtkReader RTKReader) *Server {
-	if isNilInterface(rtkReader) {
-		rtkReader = nil
-	}
-	return &Server{Repo: repo, Scanner: scanner, PricingRegistry: registry, RTKReader: rtkReader}
+type Server struct {
+	Repo            *storage.Repo
+	Scanner         *ingest.Scanner
+	PricingRegistry *pricing.Registry
+	RTKReader       RTKReader
+	RTKConfigured   bool
+	RTKInitError    string
+	CodexModelsPath string
 }
 
-func isNilInterface(v any) bool {
+func New(repo *storage.Repo, scanner *ingest.Scanner, registry *pricing.Registry, rtkReader RTKReader, extras ...any) *Server {
+	if isNilRTKReader(rtkReader) {
+		rtkReader = nil
+	}
+	s := &Server{Repo: repo, Scanner: scanner, PricingRegistry: registry, RTKReader: rtkReader}
+	if len(extras) > 0 {
+		if v, ok := extras[0].(bool); ok {
+			s.RTKConfigured = v
+		}
+	}
+	if len(extras) > 1 {
+		if v, ok := extras[1].(string); ok {
+			s.RTKInitError = v
+		}
+	}
+	if len(extras) > 2 {
+		if v, ok := extras[2].(string); ok {
+			s.CodexModelsPath = v
+		}
+	}
+	return s
+}
+
+func isNilRTKReader(v RTKReader) bool {
 	if v == nil {
 		return true
 	}
@@ -126,7 +88,12 @@ func (s *Server) Router() http.Handler {
 		r.Get("/summary", s.handleSummary)
 		r.Get("/timeseries", s.handleTimeSeries)
 		r.Get("/sessions", s.handleSessions)
+		r.Post("/sessions/import", s.handleImportSession)
+		r.Get("/sessions/export-all", s.handleExportAllSessions)
 		r.Get("/sessions/{id}/records", s.handleSessionRecords)
+		r.Get("/sessions/{id}/delete-preview", s.handleDeleteSessionPreview)
+		r.Get("/sessions/{id}/export", s.handleExportSession)
+		r.Delete("/sessions/{id}", s.handleDeleteSession)
 		r.Get("/filters", s.handleFilters)
 		r.Get("/settings", s.handleListSettings)
 		r.Put("/settings", s.handleUpsertSetting)
@@ -141,9 +108,12 @@ func (s *Server) Router() http.Handler {
 		r.Get("/pricing", s.handleListPricing)
 		r.Post("/pricing", s.handleCreatePricing)
 		r.Put("/pricing/{model}", s.handleUpdatePricing)
+		r.Post("/pricing/{model}/factory-reset", s.handleFactoryResetPricing)
 		r.Delete("/pricing/{model}", s.handleDeletePricing)
 		r.Post("/pricing/sync", s.handlePricingSync)
+		r.Post("/pricing/factory-reset", s.handleFactoryResetAllPricing)
 		r.Get("/pricing/status", s.handlePricingStatus)
+		r.Get("/model-catalog", s.handleModelCatalog)
 
 		r.Get("/rtk/summary", s.handleRTKSummary)
 		r.Get("/rtk/timeseries", s.handleRTKTimeSeries)

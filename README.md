@@ -2,7 +2,7 @@
 
 <img src="assets/img/amatoken-logo.png" alt="amatoken" width="120" align="left"/>
 
-Self-hosted observability for Claude Code and Codex usage. Reads Claude Code JSONL from `~/.claude/projects/`, Codex session JSONL from `~/.codex/sessions/` when available, aggregates tokens and cost by session / project / model, and serves a single-binary dashboard. Pricing is pulled from **OpenRouter** automatically — no manual price upkeep required.
+Self-hosted observability for **AI cost, usage, and session workflows**. Reads Claude Code JSONL from `~/.claude/projects/`, Codex session JSONL from `~/.codex/sessions/` when available, aggregates tokens and cost by session / project / model, and serves a single-binary dashboard with pricing, budgets, savings, and session-level operations. Pricing is pulled from **OpenRouter** automatically, and Codex model metadata can enrich model visibility when available.
 
 <br clear="all"/>
 
@@ -14,13 +14,14 @@ Self-hosted observability for Claude Code and Codex usage. Reads Claude Code JSO
 |---|---|---|
 | Docker Engine | 20.10+ | `docker --version` |
 | `git` | any | needed by the installer to clone the repo |
-| Claude Code | recent build | Optional but primary source; reads `~/.claude/projects/`. |
-| Codex CLI | recent build | Optional; reads `~/.codex/sessions/` when mounted. |
-| RTK | any | Optional; reads `~/.local/share/rtk/history.db` when mounted. |
+| `curl` + `bash` | any | required for the one-line installer |
+| Local session history | recent build | reads Claude Code from `~/.claude/projects/` and Codex from `~/.codex/sessions/` when available |
+| Codex model cache | optional | if `~/.codex/models_cache.json` exists, amatoken enriches model metadata automatically |
+| RTK | optional | if `~/.local/share/rtk/history.db` exists, amatoken enables the RTK section automatically |
 | OS | Linux or macOS | Windows: run inside WSL2 |
 | Free port | 2002 | configurable at install time or via `AMATOKEN_PORT` |
 
-> Source directories are mounted read-only where possible. The bundled Compose file currently runs the container as root so it can read Claude/Codex session files and the optional RTK database across common host permission layouts. The SQLite app database still lives in the Docker volume `amatoken-db`.
+> `~/.claude/projects` is mounted read-write because session export/import and permanent deletion operate on the local JSONL files. `~/.codex/sessions` stays mounted read-only for ingestion. The bundled runtime starts the container as `root` so local session files and optional RTK data stay accessible across common host permission layouts.
 
 ---
 
@@ -62,7 +63,8 @@ curl localhost:2002/healthz             # → ok
 xdg-open http://localhost:2002          # or: open http://localhost:2002
 ```
 
-If RTK is not installed on that machine, amatoken still works normally for Claude usage data; only the RTK section stays unavailable.
+If RTK is not installed on that machine, amatoken still works normally for session usage data; only the RTK section stays unavailable.
+If Codex has not generated `~/.codex/models_cache.json` yet, amatoken still works; only Codex-specific context-window metadata stays unavailable.
 
 ### Update
 
@@ -158,14 +160,12 @@ docker volume create amatoken-db
 
 docker run -d --name amatoken \
   -p 2002:2002 \
-  -e CLAUDE_PROJECTS_DIR=/claude-projects \
-  -e CODEX_SESSIONS_DIR=/codex-sessions \
-  -e RTK_DB_PATH=/rtk-data/history.db \
-  -v "$HOME/.claude/projects:/claude-projects:ro" \
-  -v "$HOME/.codex/sessions:/codex-sessions:ro" \
+  -e CLAUDE_PROJECTS_DIR=/claude-projects   -e CODEX_SESSIONS_DIR=/codex-sessions   -e CODEX_MODEL=gpt-5-5   -e CODEX_MODELS_CACHE_PATH=/codex-home/models_cache.json   -e RTK_DB_PATH=/rtk-data/history.db   -v "$HOME/.claude/projects:/claude-projects"   -v "$HOME/.codex/sessions:/codex-sessions:ro" 
   -v "$HOME/.local/share/rtk:/rtk-data" \
+  -v "$HOME/.codex:/codex-home:ro" \
   -v amatoken-db:/data \
   -e RTK_DB_PATH=/rtk-data/history.db \
+  -e CODEX_MODELS_CACHE_PATH=/codex-home/models_cache.json \
   --restart unless-stopped \
   amatoken
 ```
@@ -177,6 +177,7 @@ No Docker, hot-iterate on the code:
 ```bash
 CLAUDE_PROJECTS_DIR=$HOME/.claude/projects \
 CODEX_SESSIONS_DIR=$HOME/.codex/sessions \
+CODEX_MODELS_CACHE_PATH=$HOME/.codex/models_cache.json \
 RTK_DB_PATH=$HOME/.local/share/rtk/history.db \
 DB_PATH=./amatoken.db \
   go run ./cmd/server
@@ -196,11 +197,11 @@ Environment variables (sensible defaults):
 | `CLAUDE_PROJECTS_DIR` | `/claude-projects` | Claude Code JSONL directory inside the container. |
 | `CODEX_SESSIONS_DIR` | empty | Codex session JSONL directory. Set to `/codex-sessions` by Compose. |
 | `CODEX_MODEL` | `gpt-5.5` | Default Codex model when the session file does not include one; normalized to dash form for pricing. |
-| `RTK_DB_PATH` | empty | Optional RTK history database path. Set to `/rtk-data/history.db` by Compose. |
 | `DB_PATH` | `/data/amatoken.db` | SQLite file path. |
 | `LISTEN_ADDR` | `:2002` | HTTP bind address. |
 | `RECONCILE_INTERVAL` | `60s` | Periodic full re-scan in case fsnotify missed an event. |
 | `PRICING_SYNC_INTERVAL` | `12h` | OpenRouter auto-sync cadence (only runs while the toggle is on). |
+| `CODEX_MODELS_CACHE_PATH` | empty | Optional path to Codex `models_cache.json` inside the mounted `.codex` directory; when readable, amatoken enriches context-window metadata for Codex models. |
 | `RTK_DB_PATH` | `/rtk-data/history.db` | Optional RTK SQLite database; when readable, the RTK section is enabled automatically. |
 | `AMATOKEN_PORT` | `2002` | Host-side port mapping (read by `docker-compose.yml`). |
 
@@ -257,7 +258,7 @@ curl localhost:2002/api/pricing/status
 - Codex ingestion is enabled only when `CODEX_SESSIONS_DIR` is set. It reads `session_meta` for cwd/session id and ingests `event_msg` records whose payload type is `token_count`.
 - RTK data is read from `RTK_DB_PATH` when configured; if the database is missing or unreadable, the RTK endpoints return empty/unavailable data and the app continues.
 
-**Project identity = `cwd`, not slug.** Claude Code names project directories after the cwd in which a session *started*, but the cwd inside the JSONL can change as you `cd` around mid-session. amatoken groups by the per-record `cwd` (falling back to project_slug when cwd is missing) so subprojects under the same starting directory show up as distinct rows.
+**Project identity = `cwd`, not slug.** In local session files, project directories can reflect where a session *started*, but the cwd inside the JSONL may change as you move around mid-session. amatoken groups by the per-record `cwd` (falling back to project_slug when cwd is missing) so subprojects under the same starting directory show up as distinct rows.
 
 ---
 
@@ -340,7 +341,7 @@ amatoken is the *measurement* tool — but here's what tends to move the needle:
 - **Switch model per task.** Haiku for greps and renames, Sonnet for most coding work, Opus for architecture and tough debugging. The **Top models by spend** panel makes it obvious which model is eating your budget.
 - **Start a fresh session for unrelated work.** As context grows, occasional cache writes (priced ~1.25× input) add up. New session = clean cache.
 - **Be specific.** Vague prompts trigger exploration; precise file/line references skip it.
-- **`Read` with `offset`/`limit`** instead of letting Claude pull whole large files.
+- **`Read` with `offset`/`limit`** instead of letting the assistant pull whole large files.
 
 ---
 

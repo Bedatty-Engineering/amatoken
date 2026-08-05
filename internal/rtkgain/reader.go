@@ -18,6 +18,10 @@ type Summary struct {
 	SavingsPct    float64 `json:"savings_pct"`
 	TotalTimeMs   int64   `json:"total_time_ms"`
 	Available     bool    `json:"available"`
+	Installed     bool    `json:"installed"`
+	Status        string  `json:"status,omitempty"`
+	Detail        string  `json:"detail,omitempty"`
+	InstallURL    string  `json:"install_url,omitempty"`
 }
 
 type TimePoint struct {
@@ -80,13 +84,13 @@ func (r *Reader) Close() {
 	}
 }
 
-func (r *Reader) Summary(ctx context.Context) (*Summary, error) {
+func (r *Reader) Summary(ctx context.Context, from, to *time.Time) (*Summary, error) {
 	if !r.IsAvailable() {
-		return &Summary{Available: false}, nil
+		return &Summary{Available: false, Installed: true, Status: "unavailable"}, nil
 	}
 
 	r.mu.Lock()
-	if r.cachedSummary != nil && time.Since(r.lastFetch) < r.cacheTTL {
+	if from == nil && to == nil && r.cachedSummary != nil && time.Since(r.lastFetch) < r.cacheTTL {
 		s := r.cachedSummary
 		r.mu.Unlock()
 		return s, nil
@@ -94,7 +98,7 @@ func (r *Reader) Summary(ctx context.Context) (*Summary, error) {
 	r.mu.Unlock()
 
 	var s Summary
-	row := r.db.QueryRowContext(ctx, `
+	query := `
 		SELECT
 			COUNT(*),
 			COALESCE(SUM(input_tokens), 0),
@@ -106,17 +110,32 @@ func (r *Reader) Summary(ctx context.Context) (*Summary, error) {
 			END,
 			COALESCE(SUM(exec_time_ms), 0)
 		FROM commands
-	`)
+		WHERE 1=1
+	`
+	args := []any{}
+	if from != nil {
+		query += " AND timestamp >= ?"
+		args = append(args, from.Format(time.RFC3339))
+	}
+	if to != nil {
+		query += " AND timestamp <= ?"
+		args = append(args, to.Format(time.RFC3339))
+	}
+	row := r.db.QueryRowContext(ctx, query, args...)
 	if err := row.Scan(&s.TotalCommands, &s.InputTokens, &s.OutputTokens, &s.SavedTokens, &s.SavingsPct, &s.TotalTimeMs); err != nil {
 		log.Printf("rtkgain: summary query failed: %v", err)
-		return &Summary{Available: false}, nil
+		return &Summary{Available: false, Installed: true, Status: "unavailable"}, nil
 	}
 	s.Available = true
+	s.Installed = true
+	s.Status = "available"
 
-	r.mu.Lock()
-	r.cachedSummary = &s
-	r.lastFetch = time.Now()
-	r.mu.Unlock()
+	if from == nil && to == nil {
+		r.mu.Lock()
+		r.cachedSummary = &s
+		r.lastFetch = time.Now()
+		r.mu.Unlock()
+	}
 
 	return &s, nil
 }
@@ -127,7 +146,7 @@ func (r *Reader) TimeSeries(ctx context.Context, bucket string, from, to *time.T
 	}
 
 	// Only use cache for unfiltered queries.
-	if command == "" {
+	if command == "" && from == nil && to == nil {
 		r.mu.Lock()
 		if r.cachedTimeseries != nil && time.Since(r.lastFetch) < r.cacheTTL {
 			ts := r.cachedTimeseries
@@ -186,7 +205,7 @@ func (r *Reader) TimeSeries(ctx context.Context, bucket string, from, to *time.T
 		points = append(points, p)
 	}
 
-	if command == "" {
+	if command == "" && from == nil && to == nil {
 		r.mu.Lock()
 		r.cachedTimeseries = points
 		r.lastFetch = time.Now()
@@ -196,13 +215,13 @@ func (r *Reader) TimeSeries(ctx context.Context, bucket string, from, to *time.T
 	return points, nil
 }
 
-func (r *Reader) Commands(ctx context.Context, limit int, date string) ([]CommandStat, error) {
+func (r *Reader) Commands(ctx context.Context, limit int, date string, from, to *time.Time) ([]CommandStat, error) {
 	if !r.IsAvailable() {
 		return []CommandStat{}, nil
 	}
 
 	// Only cache the all-time (unfiltered) query.
-	if date == "" {
+	if date == "" && from == nil && to == nil {
 		r.mu.Lock()
 		if r.cachedCommands != nil && time.Since(r.lastFetch) < r.cacheTTL {
 			cmds := r.cachedCommands
@@ -234,6 +253,14 @@ func (r *Reader) Commands(ctx context.Context, limit int, date string) ([]Comman
 		query += " AND DATE(timestamp) = ?"
 		args = append(args, date)
 	}
+	if from != nil {
+		query += " AND timestamp >= ?"
+		args = append(args, from.Format(time.RFC3339))
+	}
+	if to != nil {
+		query += " AND timestamp <= ?"
+		args = append(args, to.Format(time.RFC3339))
+	}
 	query += " GROUP BY original_cmd ORDER BY saved_tokens DESC LIMIT ?"
 	args = append(args, limit)
 
@@ -262,7 +289,7 @@ func (r *Reader) Commands(ctx context.Context, limit int, date string) ([]Comman
 		}
 	}
 
-	if date == "" {
+	if date == "" && from == nil && to == nil {
 		r.mu.Lock()
 		r.cachedCommands = raw
 		r.lastFetch = time.Now()

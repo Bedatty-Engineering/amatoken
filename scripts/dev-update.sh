@@ -95,10 +95,12 @@ else
   docker run -d --name amatoken \
     --user "0:0" \
     -p "${PORT}:2002" \
-    -v "$HOME/.claude/projects:/claude-projects:ro" \
+    -v "$HOME/.claude/projects:/claude-projects" \
     -v "${HOME}/.local/share/rtk:/rtk-data" \
+    -v "$HOME/.codex:/codex-home:ro" \
     -v amatoken-db:/data \
     -e RTK_DB_PATH=/rtk-data/history.db \
+    -e CODEX_MODELS_CACHE_PATH=/codex-home/models_cache.json \
     --restart unless-stopped \
     amatoken
 fi

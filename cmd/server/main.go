@@ -38,6 +38,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("PRICING_SYNC_INTERVAL: %v", err)
 	}
+	codexModelsPath := env("CODEX_MODELS_CACHE_PATH", "")
 
 	db, err := storage.Open(dbPath)
 	if err != nil {
@@ -82,8 +83,11 @@ func main() {
 	go registry.Run(ctx)
 
 	rtkDBPath := env("RTK_DB_PATH", "")
+	rtkConfigured := rtkDBPath != ""
+	rtkInitError := ""
 	rtkReader, err := rtkgain.New(rtkDBPath)
 	if err != nil {
+		rtkInitError = err.Error()
 		log.Printf("rtk: init failed: %v (continuing without RTK tab)", err)
 	} else if rtkReader != nil {
 		log.Printf("rtk: opened RTK database at %s", rtkDBPath)
@@ -92,7 +96,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           httpapi.New(repo, scanner, registry, rtkReader).Router(),
+		Handler:           httpapi.New(repo, scanner, registry, rtkReader, rtkConfigured, rtkInitError, codexModelsPath).Router(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {

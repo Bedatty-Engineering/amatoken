@@ -135,13 +135,19 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if v, err := strconv.Atoi(q.Get("offset")); err == nil && v >= 0 {
 		offset = v
 	}
+	sortBy := q.Get("sort")
 	filters := parseFilters(r)
-	rows, err := s.Repo.ListSessions(ctx, filters, limit, offset)
+	total, err := s.Repo.CountSessions(ctx, filters)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	total, err := s.Repo.CountSessions(ctx, filters)
+	fetchLimit, fetchOffset := limit, offset
+	needSortedPage := sortBy == "cost_desc" || sortBy == "cost_asc" || sortBy == "messages_desc" || sortBy == "messages_asc"
+	if needSortedPage {
+		fetchLimit, fetchOffset = int(total), 0
+	}
+	rows, err := s.Repo.ListSessions(ctx, filters, fetchLimit, fetchOffset)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -152,7 +158,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Accurate per-session cost: a session can mix several models, each with
-	// its own pricing. Pull the per-(session, model) breakdown for the page
+	// its own pricing. Pull the per-(session, model) breakdown for the fetched
 	// rows and sum cost across models.
 	ids := make([]string, 0, len(rows))
 	for _, sr := range rows {
@@ -179,11 +185,49 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			CostUSD:    costBySession[sr.SessionID],
 		})
 	}
+	if needSortedPage {
+		sort.SliceStable(res, func(i, j int) bool {
+			switch sortBy {
+			case "cost_asc":
+				if res[i].CostUSD != res[j].CostUSD {
+					return res[i].CostUSD < res[j].CostUSD
+				}
+				return res[i].LastSeen.Before(res[j].LastSeen)
+			case "cost_desc":
+				if res[i].CostUSD != res[j].CostUSD {
+					return res[i].CostUSD > res[j].CostUSD
+				}
+				return res[i].LastSeen.After(res[j].LastSeen)
+			case "messages_asc":
+				if res[i].Messages != res[j].Messages {
+					return res[i].Messages < res[j].Messages
+				}
+				return res[i].LastSeen.Before(res[j].LastSeen)
+			case "messages_desc":
+				if res[i].Messages != res[j].Messages {
+					return res[i].Messages > res[j].Messages
+				}
+				return res[i].LastSeen.After(res[j].LastSeen)
+			default:
+				return res[i].LastSeen.After(res[j].LastSeen)
+			}
+		})
+		if offset >= len(res) {
+			res = []out{}
+		} else {
+			end := offset + limit
+			if end > len(res) {
+				end = len(res)
+			}
+			res = res[offset:end]
+		}
+	}
 	writeJSON(w, 200, map[string]any{
 		"rows":   res,
 		"total":  total,
 		"limit":  limit,
 		"offset": offset,
+		"sort":   sortBy,
 	})
 }
 
@@ -383,16 +427,16 @@ func (s *Server) handleProjectsRanking(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type proj struct {
-		ProjectSlug         string  `json:"project_slug"`
-		Cwd                 string  `json:"cwd"`
+		ProjectSlug         string   `json:"project_slug"`
+		Cwd                 string   `json:"cwd"`
 		Models              []string `json:"models"`
-		InputTokens         int64   `json:"input_tokens"`
-		OutputTokens        int64   `json:"output_tokens"`
-		CacheCreationTokens int64   `json:"cache_creation_tokens"`
-		CacheReadTokens     int64   `json:"cache_read_tokens"`
-		Messages            int64   `json:"messages"`
-		Sessions            int64   `json:"sessions"`
-		CostUSD             float64 `json:"cost_usd"`
+		InputTokens         int64    `json:"input_tokens"`
+		OutputTokens        int64    `json:"output_tokens"`
+		CacheCreationTokens int64    `json:"cache_creation_tokens"`
+		CacheReadTokens     int64    `json:"cache_read_tokens"`
+		Messages            int64    `json:"messages"`
+		Sessions            int64    `json:"sessions"`
+		CostUSD             float64  `json:"cost_usd"`
 	}
 	agg := map[string]*proj{}
 	modelsSeen := map[string]map[string]bool{}

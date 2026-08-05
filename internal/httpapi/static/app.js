@@ -4,8 +4,9 @@ function amatoken() {
     // Per-tab filters: Dashboard and Sessions keep independent state so
     // changing one never affects the other.
     filters: {
-      dashboard: { range: 'all', from: '', to: '', project: '', model: '' },
+      dashboard: { range: '30d', from: '', to: '', project: '', model: '' },
       sessions:  { range: 'all', from: '', to: '', project: '', model: '', search: '' },
+      savings:   { range: '30d', from: '', to: '' },
     },
     options: { projects: [], models: [] },
     summary: {},
@@ -14,20 +15,32 @@ function amatoken() {
     total: 0,
     page: 1,
     limit: 50,
+    sessionsSort: 'last_seen_desc',
     rankings: { projects: [], models: [] },
     pricing: [],
+    modelCatalog: [],
+    pricingSearch: '',
+    pricingSource: '',
+    pricingProvider: '',
+    pricingSort: 'price_desc',
+    pricingPage: 1,
+    pricingLimit: 25,
     pricingStatus: null,
+    pricingCreateOpen: false,
     syncing: false,
     refreshing: false,
     refreshState: null,    // null | 'success' | 'error'
     syncState: null,       // null | 'success' | 'error'
+    importingSession: false,
+    importSessionState: null,
     comparison: null,      // { cost_usd, sessions, messages, input_tokens, ... } as % delta
     comparisonLabel: '',   // human label like "vs previous 7 days" or "vs last month"
     budgets: [],
     newBudget: { name: '', amount_usd: 0 },
-    drilldown: { open: false, loading: false, records: [], session: null },
+    drilldown: { open: false, loading: false, deleting: false, records: [], session: null },
     metricDetail: { open: false, title: '', subtitle: '', firstHeader: '', rows: [] },
     confirmModal: { open: false, title: '', message: '', confirmLabel: 'Delete', onConfirm: null },
+    sessionDeleteModal: { open: false, session: null, loading: false, deleting: false, confirmText: '', preview: null, error: '' },
     autoRefresh: true,
     autoSync: true,
     autoRefreshTimer: null,
@@ -59,6 +72,7 @@ function amatoken() {
       await this.loadAutomationSettings();
       await this.reload();
       await this.loadPricing();
+      await this.loadModelCatalog();
       this.pollResources();
     },
 
@@ -72,6 +86,137 @@ function amatoken() {
     },
     confirmNo() {
       this.confirmModal.open = false;
+    },
+
+    sessionExportFilename(session) {
+      if (!session) return 'session.tgz';
+      const path = this.formatPath(session.cwd || session.project_slug || 'session');
+      const parts = String(path).split('/').filter(Boolean);
+      const leaf = (parts[parts.length - 1] || 'session').replace(/[^a-zA-Z0-9._-]+/g, '-');
+      const d = session.last_seen ? new Date(session.last_seen) : new Date();
+      const pad = n => String(n).padStart(2, '0');
+      const stamp = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+      return `${leaf}-${stamp}.amatoken-session.tgz`;
+    },
+    exportAllSessionsFilename() {
+      const d = new Date();
+      const pad = n => String(n).padStart(2, '0');
+      const stamp = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+      return `amatoken-all-sessions-${stamp}.tgz`;
+    },
+    exportAllSessions() {
+      const a = document.createElement('a');
+      const filename = this.exportAllSessionsFilename();
+      a.href = `/api/sessions/export-all?filename=${encodeURIComponent(filename)}`;
+      a.download = filename;
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    },
+    triggerSessionImport() {
+      if (this.importingSession || !this.$refs.sessionImport) return;
+      this.$refs.sessionImport.value = '';
+      this.$refs.sessionImport.click();
+    },
+    async importSessionFile(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      this.importingSession = true;
+      this.importSessionState = null;
+      try {
+        const fd = new FormData();
+        fd.append('file', file);
+        const r = await fetch('/api/sessions/import', { method:'POST', body: fd });
+        if (!r.ok) {
+          this.askConfirm('Could not import session bundle', await r.text() || 'Server rejected the import.', () => {}, 'OK');
+          this.importSessionState = 'error';
+          return;
+        }
+        const res = await r.json().catch(() => ({}));
+        await this.loadFilterOptions();
+        await this.reload();
+        const artifactBits = [];
+        if (res.bundle) {
+          if (res.history_lines_added) artifactBits.push(`${res.history_lines_added} history line(s)`);
+          if (res.session_env_files) artifactBits.push(`${res.session_env_files} session-env file(s)`);
+          if (res.file_history_files) artifactBits.push(`${res.file_history_files} file-history file(s)`);
+        }
+        const importedLabel = res.full_bundle ? 'All sessions bundle imported' : (res.bundle ? 'Session bundle imported' : 'Session imported');
+        const importedVerb = res.full_bundle ? 'Restored machine bundle' : (res.bundle ? 'Restored' : 'Imported');
+        const importedScope = res.full_bundle && res.project_files ? ` · project files: ${res.project_files}` : '';
+        this.askConfirm(
+          importedLabel,
+          `${importedVerb} ${res.line_count || 0} line(s) from ${file.name}${res.session_ids?.length ? ` · session(s): ${res.session_ids.join(', ')}` : ''}${importedScope}${artifactBits.length ? ` · extras: ${artifactBits.join(', ')}` : ''}.`,
+          () => {},
+          'OK',
+        );
+        this.importSessionState = 'success';
+      } catch (_) {
+        this.importSessionState = 'error';
+      } finally {
+        this.importingSession = false;
+        event.target.value = '';
+        setTimeout(() => { this.importSessionState = null; }, 2500);
+      }
+    },
+
+    closeSessionDeleteModal() {
+      this.sessionDeleteModal = { open: false, session: null, loading: false, deleting: false, confirmText: '', preview: null, error: '', backup: false };
+    },
+    async openSessionDeleteModal(session) {
+      if (!session || !session.session_id) return;
+      this.sessionDeleteModal = { open: true, session, loading: true, deleting: false, confirmText: '', preview: null, error: '', backup: false };
+      try {
+        const r = await fetch(`/api/sessions/${encodeURIComponent(session.session_id)}/delete-preview`);
+        if (!r.ok) {
+          this.sessionDeleteModal.error = await r.text() || 'Could not inspect session artifacts.';
+          return;
+        }
+        this.sessionDeleteModal.preview = await r.json();
+      } catch (_) {
+        this.sessionDeleteModal.error = 'Could not inspect session artifacts.';
+      } finally {
+        this.sessionDeleteModal.loading = false;
+      }
+    },
+    async confirmSessionDelete() {
+      const modal = this.sessionDeleteModal;
+      const session = modal.session;
+      if (!session || !session.session_id) return;
+      if (modal.confirmText !== 'DELETE') {
+        modal.error = 'Type DELETE to confirm.';
+        return;
+      }
+      modal.deleting = true;
+      modal.error = '';
+      try {
+        const r = await fetch(`/api/sessions/${encodeURIComponent(session.session_id)}`, {
+          method:'DELETE',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ confirm: 'DELETE', backup: !!modal.backup }),
+        });
+        if (!r.ok) {
+          modal.error = await r.text() || 'Server rejected the request.';
+          return;
+        }
+        const res = await r.json().catch(() => null);
+        await this.loadFilterOptions();
+        await this.reload();
+        this.closeDrilldown();
+        this.closeSessionDeleteModal();
+        if (res && res.files && res.files.length) {
+          const first = res.files[0]?.backup_path || '';
+          this.askConfirm(
+            'Session deleted',
+            res.backup ? `Session removed from ${res.file_count || res.files.length} artifact(s). Backup created${first ? `: ${first}` : '.'}` : `Session removed from ${res.file_count || res.files.length} artifact(s) without backup.`,
+            () => {},
+            'OK',
+          );
+        }
+      } finally {
+        if (this.sessionDeleteModal.open) this.sessionDeleteModal.deleting = false;
+      }
     },
 
     async loadAutomationSettings() {
@@ -147,7 +292,7 @@ function amatoken() {
     },
     goHome() {
       this.tab = 'dashboard';
-      this.filters.dashboard = { range: 'all', from: '', to: '', project: '', model: '' };
+      this.filters.dashboard = { range: '30d', from: '', to: '', project: '', model: '' };
       this.page = 1;
       this.reload();
     },
@@ -230,10 +375,31 @@ function amatoken() {
       if (f.project) p.set('project', f.project);
       if (f.model)   p.set('model',   f.model);
       if (f.search)  p.set('q',       f.search);
+      if (this.sessionsSort && this.sessionsSort !== 'last_seen_desc') p.set('sort', this.sessionsSort);
       return p.toString();
+    },
+
+    rtkQS() {
+      const p = new URLSearchParams();
+      const b = this.rangeBounds('savings');
+      if (b.from) p.set('from', this.toDateParam(b.from));
+      if (b.to)   p.set('to',   this.toDateParam(b.to));
+      return p.toString();
+    },
+    toDateParam(value) {
+      if (!value) return '';
+      if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) return '';
+      const pad = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
     },
     searchChanged() {
       this.page = 1; // search shrinks the result set; jump back to page 1.
+      this.reload();
+    },
+    sessionsSortChanged() {
+      this.page = 1;
       this.reload();
     },
     fmtUSD(v) { return (v ?? 0).toLocaleString('en-US', { style:'currency', currency:'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }); },
@@ -527,7 +693,7 @@ function amatoken() {
     },
 
     async openDrilldown(session) {
-      this.drilldown = { open: true, loading: true, records: [], session };
+      this.drilldown = { open: true, loading: true, deleting: false, records: [], session };
       try {
         const r = await fetch(`/api/sessions/${encodeURIComponent(session.session_id)}/records`);
         this.drilldown.records = await r.json() || [];
@@ -536,7 +702,18 @@ function amatoken() {
       }
     },
     closeDrilldown() {
-      this.drilldown = { open: false, loading: false, records: [], session: null };
+      this.drilldown = { open: false, loading: false, deleting: false, records: [], session: null };
+    },
+    exportSession(session) {
+      if (!session || !session.session_id) return;
+      const a = document.createElement('a');
+      const filename = this.sessionExportFilename(session);
+      a.href = `/api/sessions/${encodeURIComponent(session.session_id)}/export?filename=${encodeURIComponent(filename)}`;
+      a.download = filename;
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
     },
     renderChart(bucket) {
       const ctx = document.getElementById('ts-chart');
@@ -573,12 +750,14 @@ function amatoken() {
         responsive: true, maintainAspectRatio: false,
         animation: false,
         interaction: { mode: 'index', intersect: false },
-        onHover: (event, elements, chart) => {
-          chart.canvas.style.cursor = elements.length ? 'pointer' : 'default';
+        onHover: (event, _elements, chart) => {
+          const hits = chart.getElementsAtEventForMode(event, 'index', { intersect: false }, false);
+          chart.canvas.style.cursor = hits.length ? 'pointer' : 'default';
         },
-        onClick: (_event, elements) => {
-          if (!elements.length) return;
-          self.openBucketDetail(elements[0].index);
+        onClick: (event, _elements, chart) => {
+          const hits = chart.getElementsAtEventForMode(event, 'index', { intersect: false }, false);
+          if (!hits.length) return;
+          self.openBucketDetail(hits[0].index);
         },
         scales: {
           x: { stacked: true, ticks:{ color:'#8b949e', autoSkip:true, maxTicksLimit: showAll ? 0 : 24 }, grid:{ color:'#21262d' } },
@@ -640,20 +819,163 @@ function amatoken() {
       this.chart = new Chart(ctx, { type: 'bar', data, options: opts });
     },
 
-    // Pricing rows ordered most-expensive first. Output rate is the
-    // primary key (it's the cost driver — ~5× input), with input rate as
-    // tiebreaker so models with the same output but different input still
-    // get a stable order. Returns a shallow copy so Save state references
-    // (the live `pricing` array) aren't disturbed.
-    sortedPricing() {
-      return [...(this.pricing || [])].sort((a, b) => {
-        const ao = a.output_per_mtok_usd ?? 0;
-        const bo = b.output_per_mtok_usd ?? 0;
-        if (bo !== ao) return bo - ao;
-        const ai = a.input_per_mtok_usd ?? 0;
-        const bi = b.input_per_mtok_usd ?? 0;
-        return bi - ai;
+    pricingSortValue(row) {
+      const output = row.output_per_mtok_usd ?? 0;
+      const input = row.input_per_mtok_usd ?? 0;
+      return output * 1000000 + input;
+    },
+    pricingProviderName(model) {
+      const m = String(model || '').toLowerCase();
+      if (!m) return 'Other';
+      if (m.includes('claude')) return 'Anthropic';
+      if (m.includes('gpt') || m.includes('o1') || m.includes('o3') || m.includes('o4') || m.includes('omni') || m.includes('whisper') || m.includes('text-embedding') || m.includes('text-moderation')) return 'OpenAI';
+      if (m.includes('gemini') || m.includes('gemma')) return 'Google';
+      if (m.includes('llama')) return 'Meta';
+      if (m.includes('mistral') || m.includes('mixtral')) return 'Mistral';
+      if (m.includes('command') || m.includes('embed-english') || m.includes('embed-multilingual')) return 'Cohere';
+      if (m.includes('grok')) return 'xAI';
+      if (m.includes('deepseek')) return 'DeepSeek';
+      if (m.includes('qwen')) return 'Alibaba';
+      if (m.includes('kimi')) return 'Moonshot';
+      if (m.includes('seed')) return 'ByteDance';
+      if (m.includes('reka')) return 'Reka';
+      return 'Other';
+    },
+
+    modelMetadataForModel(model) {
+      const rows = (this.modelCatalog && this.modelCatalog.length ? this.modelCatalog : this.pricing) || [];
+      const exact = rows.find(r => r.model === model);
+      if (exact) return exact;
+      let cur = String(model || '').replace(/-\d{8}$/, '');
+      if (cur && cur !== model) {
+        const dated = rows.find(r => r.model === cur);
+        if (dated) return dated;
+      }
+      while (cur) {
+        const next = cur.replace(/-\d+$/, '');
+        if (next === cur || !next.includes('-')) break;
+        cur = next;
+        const match = rows.find(r => r.model === cur);
+        if (match) return match;
+      }
+      return null;
+    },
+    sessionContextRows() {
+      const records = this.drilldown?.records || [];
+      const grouped = new Map();
+      for (const r of records) {
+        const key = r.model || '<unknown>';
+        const total = (r.input_tokens || 0) + (r.output_tokens || 0) + (r.cache_creation_tokens || 0) + (r.cache_read_tokens || 0);
+        const row = grouped.get(key) || {
+          model: key,
+          company: this.pricingProviderName(key),
+          context_length: 0,
+          max_output_tokens: 0,
+          messages: 0,
+          peak_prompt_tokens: 0,
+          peak_output_tokens: 0,
+          peak_total_tokens: 0,
+          occupancy_pct: 0,
+        };
+        row.messages += 1;
+        const prompt = (r.input_tokens || 0) + (r.cache_creation_tokens || 0) + (r.cache_read_tokens || 0);
+        row.peak_prompt_tokens = Math.max(row.peak_prompt_tokens, prompt);
+        row.peak_output_tokens = Math.max(row.peak_output_tokens, r.output_tokens || 0);
+        row.peak_total_tokens = Math.max(row.peak_total_tokens, total);
+        const meta = this.modelMetadataForModel(key);
+        if (meta) {
+          row.context_length = meta.context_length || 0;
+          row.max_output_tokens = meta.max_output_tokens || 0;
+        }
+        row.occupancy_pct = row.context_length > 0 ? (row.peak_prompt_tokens / row.context_length) * 100 : 0;
+        grouped.set(key, row);
+      }
+      return [...grouped.values()].sort((a, b) => {
+        if (a.occupancy_pct !== b.occupancy_pct) return b.occupancy_pct - a.occupancy_pct;
+        if (a.peak_prompt_tokens !== b.peak_prompt_tokens) return b.peak_prompt_tokens - a.peak_prompt_tokens;
+        return String(a.model).localeCompare(String(b.model));
       });
+    },
+    sessionContextSummary() {
+      const rows = this.sessionContextRows();
+      const summary = {
+        model_count: rows.length,
+        peak_prompt_tokens: 0,
+        peak_total_tokens: 0,
+        largest_context_length: 0,
+        highest_occupancy_pct: 0,
+      };
+      for (const row of rows) {
+        summary.peak_prompt_tokens = Math.max(summary.peak_prompt_tokens, row.peak_prompt_tokens || 0);
+        summary.peak_total_tokens = Math.max(summary.peak_total_tokens, row.peak_total_tokens || 0);
+        summary.largest_context_length = Math.max(summary.largest_context_length, row.context_length || 0);
+        summary.highest_occupancy_pct = Math.max(summary.highest_occupancy_pct, row.occupancy_pct || 0);
+      }
+      return summary;
+    },
+    sortedPricing() {
+      const dir = this.pricingSort === 'price_asc' ? 1 : -1;
+      return [...(this.pricing || [])].sort((a, b) => {
+        const av = this.pricingSortValue(a);
+        const bv = this.pricingSortValue(b);
+        if (av !== bv) return (av - bv) * dir;
+        return String(a.model || '').localeCompare(String(b.model || '')) * dir;
+      });
+    },
+    pricingSources() {
+      return [...new Set((this.pricing || []).map(p => p.source).filter(Boolean))].sort();
+    },
+    pricingProviders() {
+      return [...new Set((this.pricing || []).map(p => this.pricingProviderName(p.model)).filter(Boolean))].sort();
+    },
+    filteredPricing() {
+      const needle = (this.pricingSearch || '').trim().toLowerCase();
+      const source = (this.pricingSource || '').trim().toLowerCase();
+      const provider = (this.pricingProvider || '').trim().toLowerCase();
+      let rows = this.sortedPricing();
+      if (source) {
+        rows = rows.filter(p => (p.source || '').toLowerCase() === source);
+      }
+      if (provider) {
+        rows = rows.filter(p => this.pricingProviderName(p.model).toLowerCase() === provider);
+      }
+      if (!needle) return rows;
+      return rows.filter(p => (p.model || '').toLowerCase().includes(needle));
+    },
+    pagedPricing() {
+      const start = (this.pricingPage - 1) * this.pricingLimit;
+      return this.filteredPricing().slice(start, start + this.pricingLimit);
+    },
+    get pricingPages() {
+      return Math.max(1, Math.ceil(this.filteredPricing().length / this.pricingLimit));
+    },
+    pricingPageWindow() {
+      const total = this.pricingPages, cur = this.pricingPage, span = 2;
+      const start = Math.max(1, cur - span);
+      const end = Math.min(total, cur + span);
+      const out = [];
+      for (let i = start; i <= end; i++) out.push(i);
+      return out;
+    },
+    goPricingPage(n) {
+      n = Math.max(1, Math.min(this.pricingPages, n));
+      if (n === this.pricingPage) return;
+      this.pricingPage = n;
+    },
+    pricingSearchChanged() {
+      this.pricingPage = 1;
+    },
+    pricingSourceChanged() {
+      this.pricingPage = 1;
+    },
+    pricingProviderChanged() {
+      this.pricingPage = 1;
+    },
+    pricingSortChanged() {
+      this.pricingPage = 1;
+    },
+    normalizePricingPage() {
+      this.pricingPage = Math.max(1, Math.min(this.pricingPage, this.pricingPages));
     },
 
     async loadPricing() {
@@ -665,9 +987,10 @@ function amatoken() {
       const prev = new Map((this.pricing || []).map(p => [p.model, p]));
       this.pricing = (rates || []).map(p => {
         const old = prev.get(p.model);
-        return { ...p, _saving: old?._saving || false, _saveState: old?._saveState || null };
+        return { ...p, _saving: false, _saveState: null, _resetting: false };
       });
       this.pricingStatus = status;
+      this.normalizePricingPage();
     },
     pricingStatusText() {
       const s = this.pricingStatus;
@@ -694,6 +1017,7 @@ function amatoken() {
         this.syncing = false;
         this.flashState('syncState', ok ? 'success' : 'error');
         await this.loadPricing();
+        await this.loadModelCatalog();
         await this.reload();
       }
     },
@@ -715,6 +1039,7 @@ function amatoken() {
         p._saving = false;
         p._saveState = ok ? 'success' : 'error';
         await this.loadPricing();
+        await this.loadModelCatalog();
         await this.reload();
         const modelId = p.model;
         setTimeout(() => {
@@ -754,6 +1079,7 @@ function amatoken() {
           await r.text() || `A pricing row for "${id}" already exists.`,
           () => {}, 'OK');
         await this.loadPricing();
+        await this.loadModelCatalog();
         return;
       }
       if (!r.ok) {
@@ -763,6 +1089,7 @@ function amatoken() {
       }
       this.newPricing = { model: '', input_per_mtok_usd: 0, output_per_mtok_usd: 0, cache_write_per_mtok_usd: 0, cache_read_per_mtok_usd: 0 };
       await this.loadPricing();
+      await this.loadModelCatalog();
       await this.reload();
     },
     deletePricing(p) {
@@ -775,8 +1102,66 @@ function amatoken() {
           // table (`i` from x-for) doesn't match `this.pricing`. Find by id.
           const idx = this.pricing.findIndex(x => x.model === p.model);
           if (idx >= 0) this.pricing.splice(idx, 1);
+          this.normalizePricingPage();
+          await this.loadModelCatalog();
           await this.reload();
         },
+      );
+    },
+
+    factoryResetPricing(p) {
+      this.askConfirm(
+        'Restore factory pricing?',
+        `Reset "${p.model}" to the factory pricing source. This removes manual edits and restores the official values when available. Models without a factory source are kept unchanged.`,
+        async () => {
+          p._resetting = true;
+          try {
+            const r = await fetch(`/api/pricing/${encodeURIComponent(p.model)}/factory-reset`, { method:'POST' });
+            if (!r.ok) {
+              this.askConfirm('Could not restore factory pricing', await r.text() || 'Server rejected the request.', () => {}, 'OK');
+              return;
+            }
+            const res = await r.json().catch(() => null);
+            if (res && res.action === 'skipped') {
+              this.askConfirm('No factory source available', `"${p.model}" does not have a factory pricing source configured, so the current row was kept as-is.`, () => {}, 'OK');
+            }
+            await this.loadPricing();
+            await this.loadModelCatalog();
+            await this.reload();
+          } finally {
+            p._resetting = false;
+          }
+        },
+        'Restore',
+      );
+    },
+    factoryResetAllPricing() {
+      this.askConfirm(
+        'Restore factory pricing for all models?',
+        'This forces every pricing row back to the factory source and removes manual edits where a factory source exists. Models without a factory source are kept unchanged.',
+        async () => {
+          this.syncing = true;
+          this.syncState = null;
+          try {
+            const r = await fetch('/api/pricing/factory-reset', { method:'POST' });
+            if (!r.ok) {
+              this.askConfirm('Could not restore factory pricing', await r.text() || 'Server rejected the request.', () => {}, 'OK');
+              this.flashState('syncState', 'error');
+              return;
+            }
+            const res = await r.json().catch(() => null);
+            if (res && res.deleted > 0) {
+              this.askConfirm('Factory restore completed with removals', `${res.deleted} row(s) were removed during factory restore.`, () => {}, 'OK');
+            }
+            this.flashState('syncState', 'success');
+            await this.loadPricing();
+            await this.loadModelCatalog();
+            await this.reload();
+          } finally {
+            this.syncing = false;
+          }
+        },
+        'Restore all',
       );
     },
 
@@ -784,10 +1169,12 @@ function amatoken() {
       // Full reload: fetches summary, unfiltered timeseries, and commands list.
       // Clears any active command filter.
       this.rtkCommandFilter = null;
+      const qs = this.rtkQS();
+      const withQS = base => qs ? `${base}${base.includes('?') ? '&' : '?'}${qs}` : base;
       const [summary, timeseries, commands] = await Promise.all([
-        fetch('/api/rtk/summary').then(r=>r.json()).catch(() => ({})),
-        fetch('/api/rtk/timeseries?bucket=day').then(r=>r.json()).catch(() => []),
-        fetch('/api/rtk/commands').then(r=>r.json()).catch(() => []),
+        fetch(withQS('/api/rtk/summary')).then(r=>r.json()).catch(() => ({})),
+        fetch(withQS('/api/rtk/timeseries?bucket=day')).then(r=>r.json()).catch(() => []),
+        fetch(withQS('/api/rtk/commands')).then(r=>r.json()).catch(() => []),
       ]);
       this.rtkSummary = summary;
       this.rtkCommands = commands || [];
@@ -813,9 +1200,11 @@ function amatoken() {
       // Toggle: clicking the active filter clears it.
       this.rtkCommandFilter = this.rtkCommandFilter === cmd ? null : cmd;
 
-      const url = this.rtkCommandFilter
+      const qs = this.rtkQS();
+      const base = this.rtkCommandFilter
         ? `/api/rtk/timeseries?bucket=day&command=${encodeURIComponent(this.rtkCommandFilter)}`
         : '/api/rtk/timeseries?bucket=day';
+      const url = qs ? `${base}&${qs}` : base;
 
       // Only re-fetch timeseries — summary and commands don't change per-command.
       const timeseries = await fetch(url).then(r=>r.json()).catch(() => []);
@@ -935,12 +1324,15 @@ function amatoken() {
         options: {
           responsive: true,
           maintainAspectRatio: true,
-          onHover: (_e, elements, chart) => {
-            chart.canvas.style.cursor = elements.length ? 'pointer' : 'default';
+          interaction: { mode: 'index', intersect: false },
+          onHover: (event, _elements, chart) => {
+            const hits = chart.getElementsAtEventForMode(event, 'index', { intersect: false }, false);
+            chart.canvas.style.cursor = hits.length ? 'pointer' : 'default';
           },
-          onClick: (_e, elements) => {
-            if (!elements.length) return;
-            this.openRTKDayDetail(elements[0].index);
+          onClick: (event, _elements, chart) => {
+            const hits = chart.getElementsAtEventForMode(event, 'index', { intersect: false }, false);
+            if (!hits.length) return;
+            this.openRTKDayDetail(hits[0].index);
           },
           scales: { y: { beginAtZero: true, title: { display: true, text: 'Tokens' } } },
           plugins: {
