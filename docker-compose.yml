@@ -16,10 +16,12 @@ services:
       RTK_DB_PATH: /rtk-data/history.db
       CODEX_SESSIONS_DIR: /codex-sessions
       CODEX_MODEL: gpt-5-5
+      CODEX_MODELS_CACHE_PATH: /codex-home/models_cache.json
     volumes:
-      - ${HOME}/.claude/projects:/claude-projects:ro
+      - ${HOME}/.claude/projects:/claude-projects
       - ${HOME}/.codex/sessions:/codex-sessions:ro
       - ${HOME}/.local/share/rtk:/rtk-data
+      - ${HOME}/.codex:/codex-home:ro
       - amatoken-db:/data
     restart: unless-stopped
 

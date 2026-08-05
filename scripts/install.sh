@@ -89,6 +89,9 @@ fi
 if [ ! -d "$HOME/.claude/projects" ]; then
   warn "$HOME/.claude/projects does not exist yet — amatoken will start, but the dashboard stays empty until Claude Code logs at least one session."
 fi
+if [ ! -f "$HOME/.codex/models_cache.json" ]; then
+  warn "$HOME/.codex/models_cache.json was not found — Codex-specific context metadata will stay unavailable until Codex refreshes its model cache on this machine."
+fi
 
 # --- fetch source --------------------------------------------------------
 if [ -d "$INSTALL_DIR/.git" ]; then
@@ -123,10 +126,12 @@ else
   docker run -d --name amatoken \
     --user "0:0" \
     -p "${PORT}:2002" \
-    -v "$HOME/.claude/projects:/claude-projects:ro" \
+    -v "$HOME/.claude/projects:/claude-projects" \
     -v "$HOME/.local/share/rtk:/rtk-data" \
+    -v "$HOME/.codex:/codex-home:ro" \
     -v amatoken-db:/data \
     -e RTK_DB_PATH=/rtk-data/history.db \
+    -e CODEX_MODELS_CACHE_PATH=/codex-home/models_cache.json \
     --restart unless-stopped \
     amatoken
 fi

@@ -29,6 +29,12 @@ func Open(path string) (*sql.DB, error) {
 	if err := migrateAdd(db, "model_pricing", "fetched_at", "DATETIME"); err != nil {
 		return nil, err
 	}
+	if err := migrateAdd(db, "model_pricing", "context_length", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return nil, err
+	}
+	if err := migrateAdd(db, "model_pricing", "max_output_tokens", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return nil, err
+	}
 	if err := migrateAdd(db, "budgets", "show_in_dashboard", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return nil, err
 	}

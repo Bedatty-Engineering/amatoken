@@ -8,7 +8,7 @@ import (
 	"github.com/bedatty/amatoken/internal/rtkgain"
 )
 
-func TestNewNormalizesNilRTKReader(t *testing.T) {
+func TestNewKeepsNilRTKReader(t *testing.T) {
 	var rtk *fakeRTKReader
 	s := New(nil, nil, nil, rtk)
 	if s.RTKReader != nil {
@@ -18,11 +18,11 @@ func TestNewNormalizesNilRTKReader(t *testing.T) {
 
 type fakeRTKReader struct{}
 
-func (*fakeRTKReader) Summary(context.Context) (*rtkgain.Summary, error) {
+func (*fakeRTKReader) Summary(context.Context, *time.Time, *time.Time) (*rtkgain.Summary, error) {
 	return nil, nil
 }
 
-func (*fakeRTKReader) Commands(context.Context, int, string) ([]rtkgain.CommandStat, error) {
+func (*fakeRTKReader) Commands(context.Context, int, string, *time.Time, *time.Time) ([]rtkgain.CommandStat, error) {
 	return nil, nil
 }
 

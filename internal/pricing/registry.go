@@ -38,6 +38,18 @@ type SyncResult struct {
 	DurationMs int64     `json:"duration_ms"`
 }
 
+type ResetResult struct {
+	Model  string `json:"model"`
+	Action string `json:"action"`
+	Source string `json:"source,omitempty"`
+}
+
+type ResetAllResult struct {
+	Restored int           `json:"restored"`
+	Deleted  int           `json:"deleted"`
+	Results  []ResetResult `json:"results,omitempty"`
+}
+
 // Sync fetches once and upserts. Manual rows are preserved.
 func (r *Registry) Sync(ctx context.Context) (*SyncResult, error) {
 	start := time.Now()
@@ -78,6 +90,8 @@ func (r *Registry) Sync(ctx context.Context) (*SyncResult, error) {
 			OutputPerMTokUSD:     p.OutputPerMTokUSD,
 			CacheWritePerMTokUSD: p.CacheWritePerMTokUSD,
 			CacheReadPerMTokUSD:  p.CacheReadPerMTokUSD,
+			ContextLength:        p.ContextLength,
+			MaxOutputTokens:      p.MaxOutputTokens,
 			Source:               p.Source,
 			FetchedAt:            &fetchedAt,
 		}
@@ -161,4 +175,95 @@ func (r *Registry) recordError(msg string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.lastError = msg
+}
+
+func (r *Registry) ResetModel(ctx context.Context, model string) (*ResetResult, error) {
+	prices, err := r.Provider.Fetch(ctx)
+	if err != nil {
+		r.recordError(err.Error())
+		return nil, err
+	}
+	providerMap := map[string]ModelPrice{}
+	for _, p := range prices {
+		providerMap[p.Model] = p
+	}
+	if p, ok := providerMap[model]; ok {
+		fetchedAt := p.FetchedAt
+		row := storage.Pricing{
+			Model:                p.Model,
+			InputPerMTokUSD:      p.InputPerMTokUSD,
+			OutputPerMTokUSD:     p.OutputPerMTokUSD,
+			CacheWritePerMTokUSD: p.CacheWritePerMTokUSD,
+			CacheReadPerMTokUSD:  p.CacheReadPerMTokUSD,
+			ContextLength:        p.ContextLength,
+			MaxOutputTokens:      p.MaxOutputTokens,
+			Source:               p.Source,
+			FetchedAt:            &fetchedAt,
+		}
+		if err := r.Repo.UpsertPricing(ctx, row); err != nil {
+			return nil, err
+		}
+		r.recordSuccess(1)
+		return &ResetResult{Model: model, Action: "restored", Source: p.Source}, nil
+	}
+	if p, ok := DefaultRateForModel(model); ok {
+		p.FetchedAt = nil
+		if err := r.Repo.UpsertPricing(ctx, p); err != nil {
+			return nil, err
+		}
+		r.recordSuccess(1)
+		return &ResetResult{Model: model, Action: "restored", Source: p.Source}, nil
+	}
+	return &ResetResult{Model: model, Action: "skipped"}, nil
+}
+
+func (r *Registry) ResetAll(ctx context.Context) (*ResetAllResult, error) {
+	prices, err := r.Provider.Fetch(ctx)
+	if err != nil {
+		r.recordError(err.Error())
+		return nil, err
+	}
+	providerMap := map[string]ModelPrice{}
+	for _, p := range prices {
+		providerMap[p.Model] = p
+	}
+	existing, err := r.Repo.ListPricing(ctx)
+	if err != nil {
+		return nil, err
+	}
+	res := &ResetAllResult{}
+	for _, current := range existing {
+		if p, ok := providerMap[current.Model]; ok {
+			fetchedAt := p.FetchedAt
+			row := storage.Pricing{
+				Model:                p.Model,
+				InputPerMTokUSD:      p.InputPerMTokUSD,
+				OutputPerMTokUSD:     p.OutputPerMTokUSD,
+				CacheWritePerMTokUSD: p.CacheWritePerMTokUSD,
+				CacheReadPerMTokUSD:  p.CacheReadPerMTokUSD,
+				ContextLength:        p.ContextLength,
+				MaxOutputTokens:      p.MaxOutputTokens,
+				Source:               p.Source,
+				FetchedAt:            &fetchedAt,
+			}
+			if err := r.Repo.UpsertPricing(ctx, row); err != nil {
+				return nil, err
+			}
+			res.Restored++
+			res.Results = append(res.Results, ResetResult{Model: current.Model, Action: "restored", Source: p.Source})
+			continue
+		}
+		if p, ok := DefaultRateForModel(current.Model); ok {
+			p.FetchedAt = nil
+			if err := r.Repo.UpsertPricing(ctx, p); err != nil {
+				return nil, err
+			}
+			res.Restored++
+			res.Results = append(res.Results, ResetResult{Model: current.Model, Action: "restored", Source: p.Source})
+			continue
+		}
+		res.Results = append(res.Results, ResetResult{Model: current.Model, Action: "skipped"})
+	}
+	r.recordSuccess(res.Restored)
+	return res, nil
 }
