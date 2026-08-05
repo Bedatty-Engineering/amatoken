@@ -12,13 +12,37 @@ permissions:
 
 jobs:
   release:
+    name: Semantic release
+    runs-on: ubuntu-latest
     # semantic-release pushes a CHANGELOG commit with [skip ci]; this guard
     # prevents the release job from re-firing on its own commit.
     if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
-    uses: Bedatty-Engineering/modules-hub/.github/workflows/release.yml@v1.4.2
-    with:
-      ref: ${{ github.ref_name }}
-    secrets:
-      RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
-      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+
+      - name: Materialize release branches
+        uses: Bedatty-Engineering/modules-hub/composite/config/materialize-release-branches@v1
+        with:
+          current_ref: ${{ github.ref_name }}
+
+      - name: Setup GPG signing
+        uses: Bedatty-Engineering/modules-hub/composite/config/setup-gpg@v1
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg_passphrase: ${{ secrets.GPG_PASSPHRASE }}
+          git_identity_token: ${{ secrets.RELEASE_TOKEN || github.token }}
+
+      - name: Semantic release
+        uses: Bedatty-Engineering/modules-hub/composite/config/semantic-release@v1
+        with:
+          target_ref: ${{ github.ref_name }}
+          stable_ref: main
+          github_token: ${{ secrets.RELEASE_TOKEN || github.token }}
+
+      - name: Update floating major tag
+        if: github.ref_name == 'main'
+        uses: Bedatty-Engineering/modules-hub/composite/config/update-floating-major-tag@v1
