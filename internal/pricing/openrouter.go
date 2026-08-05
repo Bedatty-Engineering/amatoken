@@ -13,11 +13,10 @@ import (
 
 const (
 	openRouterURL    = "https://openrouter.ai/api/v1/models"
-	openRouterPrefix = "anthropic/"
 	sourceOpenRouter = "openrouter"
 )
 
-// OpenRouter is a Provider that fetches Anthropic-only models from
+// OpenRouter is a Provider that fetches models from
 // https://openrouter.ai/api/v1/models. Pricing is published as USD per token
 // strings; we convert to USD per 1M tokens.
 type OpenRouter struct {
@@ -39,7 +38,12 @@ type openRouterResponse struct {
 }
 
 type openRouterModel struct {
-	ID      string `json:"id"`
+	ID            string `json:"id"`
+	ContextLength int64  `json:"context_length"`
+	TopProvider   struct {
+		ContextLength       int64 `json:"context_length"`
+		MaxCompletionTokens int64 `json:"max_completion_tokens"`
+	} `json:"top_provider"`
 	Pricing struct {
 		Prompt          string `json:"prompt"`
 		Completion      string `json:"completion"`
@@ -74,25 +78,28 @@ func (o *OpenRouter) Fetch(ctx context.Context) ([]ModelPrice, error) {
 	now := time.Now().UTC()
 	out := make([]ModelPrice, 0, 32)
 	for _, m := range raw.Data {
-		if !strings.HasPrefix(m.ID, openRouterPrefix) {
-			continue
+		modelID := m.ID
+		if idx := strings.IndexByte(modelID, '/'); idx >= 0 {
+			modelID = modelID[idx+1:]
 		}
-		modelID := strings.TrimPrefix(m.ID, openRouterPrefix)
-		// Skip variants like "claude-3.7-sonnet:thinking" — these are
+		// Skip variants like "claude-3.7-sonnet:thinking" - these are
 		// inference modes, not separate billable models for our scope.
 		if strings.Contains(modelID, ":") {
 			continue
 		}
-		// Normalise dot-versioning ("claude-opus-4.7") to dash-versioning
-		// ("claude-opus-4-7") so it matches the model IDs Claude Code writes
-		// into its session JSONL.
+		// Normalise dot-versioning ("claude-opus-4.7" / "gpt-4.1") to
+		// dash-versioning so it matches what Claude Code and Codex write into JSONL.
 		modelID = strings.ReplaceAll(modelID, ".", "-")
 		prompt := parseDollarPerToken(m.Pricing.Prompt)
 		completion := parseDollarPerToken(m.Pricing.Completion)
 		// OpenRouter still lists the model even when prompt=0 (free aliases or
-		// gated entries); skip those — they would silently zero out costs.
+		// gated entries); skip those - they would silently zero out costs.
 		if prompt == 0 && completion == 0 {
 			continue
+		}
+		contextLength := m.ContextLength
+		if m.TopProvider.ContextLength > 0 {
+			contextLength = m.TopProvider.ContextLength
 		}
 		mp := ModelPrice{
 			Model:                modelID,
@@ -100,16 +107,20 @@ func (o *OpenRouter) Fetch(ctx context.Context) ([]ModelPrice, error) {
 			OutputPerMTokUSD:     completion,
 			CacheWritePerMTokUSD: parseDollarPerToken(m.Pricing.InputCacheWrite),
 			CacheReadPerMTokUSD:  parseDollarPerToken(m.Pricing.InputCacheRead),
+			ContextLength:        contextLength,
+			MaxOutputTokens:      m.TopProvider.MaxCompletionTokens,
 			Source:               sourceOpenRouter,
 			FetchedAt:            now,
 		}
 		// Anthropic's documented defaults when OpenRouter omits cache pricing:
-		// cache write = 1.25× input, cache read = 0.10× input.
-		if mp.CacheWritePerMTokUSD == 0 {
-			mp.CacheWritePerMTokUSD = mp.InputPerMTokUSD * 1.25
-		}
-		if mp.CacheReadPerMTokUSD == 0 {
-			mp.CacheReadPerMTokUSD = mp.InputPerMTokUSD * 0.10
+		// cache write = 1.25x input, cache read = 0.10x input.
+		if strings.Contains(modelID, "claude") {
+			if mp.CacheWritePerMTokUSD == 0 {
+				mp.CacheWritePerMTokUSD = mp.InputPerMTokUSD * 1.25
+			}
+			if mp.CacheReadPerMTokUSD == 0 {
+				mp.CacheReadPerMTokUSD = mp.InputPerMTokUSD * 0.10
+			}
 		}
 		out = append(out, mp)
 	}

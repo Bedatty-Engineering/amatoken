@@ -12,14 +12,22 @@ import (
 	"github.com/bedatty/amatoken/internal/storage"
 )
 
+type Store interface {
+	GetIngestState(ctx context.Context, file string) (storage.IngestState, error)
+	SetIngestState(ctx context.Context, file string, s storage.IngestState) error
+	InsertUsage(ctx context.Context, u *storage.UsageRecord) error
+}
+
 type Scanner struct {
-	Repo *storage.Repo
+	Repo Store
 	Root string
 }
 
-func NewScanner(repo *storage.Repo, root string) *Scanner {
+func NewScanner(repo Store, root string) *Scanner {
 	return &Scanner{Repo: repo, Root: root}
 }
+
+func (s *Scanner) GetRoot() string { return s.Root }
 
 // ScanAll walks Root and processes every *.jsonl file from its saved offset.
 func (s *Scanner) ScanAll(ctx context.Context) error {

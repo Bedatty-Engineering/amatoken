@@ -15,6 +15,8 @@ type ModelPrice struct {
 	OutputPerMTokUSD     float64
 	CacheWritePerMTokUSD float64
 	CacheReadPerMTokUSD  float64
+	ContextLength        int64
+	MaxOutputTokens      int64
 	Source               string
 	FetchedAt            time.Time
 }

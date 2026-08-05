@@ -13,6 +13,8 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/amatoken ./cmd/ser
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata && mkdir -p /data && chmod 777 /data
 COPY --from=build /out/amatoken /usr/local/bin/amatoken
+COPY docker-entrypoint.sh /
+RUN chmod +x /docker-entrypoint.sh
 VOLUME ["/data"]
 EXPOSE 2002
-ENTRYPOINT ["/usr/local/bin/amatoken"]
+ENTRYPOINT ["/docker-entrypoint.sh"]

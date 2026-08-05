@@ -2,10 +2,7 @@
 
 <img src="assets/img/amatoken-logo.png" alt="amatoken" width="120" align="left"/>
 
-Self-hosted observability for **Claude Code** usage. Reads `~/.claude/projects/**/*.jsonl`,
-aggregates tokens and cost by session / project / model, and serves a single-binary
-dashboard. Pricing is pulled from **OpenRouter** automatically — no manual price
-upkeep required.
+Self-hosted observability for **AI cost, usage, and session workflows**. Reads Claude Code JSONL from `~/.claude/projects/`, Codex session JSONL from `~/.codex/sessions/` when available, aggregates tokens and cost by session / project / model, and serves a single-binary dashboard with pricing, budgets, savings, and session-level operations. Pricing is pulled from **OpenRouter** automatically, and Codex model metadata can enrich model visibility when available.
 
 <br clear="all"/>
 
@@ -17,12 +14,14 @@ upkeep required.
 |---|---|---|
 | Docker Engine | 20.10+ | `docker --version` |
 | `git` | any | needed by the installer to clone the repo |
-| Claude Code | recent build | the app reads from `~/.claude/projects/`; you need at least one logged session |
+| `curl` + `bash` | any | required for the one-line installer |
+| Local session history | recent build | reads Claude Code from `~/.claude/projects/` and Codex from `~/.codex/sessions/` when available |
+| Codex model cache | optional | if `~/.codex/models_cache.json` exists, amatoken enriches model metadata automatically |
+| RTK | optional | if `~/.local/share/rtk/history.db` exists, amatoken enables the RTK section automatically |
 | OS | Linux or macOS | Windows: run inside WSL2 |
 | Free port | 2002 | configurable at install time or via `AMATOKEN_PORT` |
 
-> `~/.claude/projects` is usually mode `700` — the container must run as your UID/GID.
-> The installer and the bundled `docker-compose.yml` already do that for you.
+> `~/.claude/projects` is mounted read-write because session export/import and permanent deletion operate on the local JSONL files. `~/.codex/sessions` stays mounted read-only for ingestion. The bundled runtime starts the container as `root` so local session files and optional RTK data stay accessible across common host permission layouts.
 
 ---
 
@@ -63,6 +62,9 @@ After install:
 curl localhost:2002/healthz             # → ok
 xdg-open http://localhost:2002          # or: open http://localhost:2002
 ```
+
+If RTK is not installed on that machine, amatoken still works normally for session usage data; only the RTK section stays unavailable.
+If Codex has not generated `~/.codex/models_cache.json` yet, amatoken still works; only Codex-specific context-window metadata stays unavailable.
 
 ### Update
 
@@ -113,7 +115,9 @@ curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/s
 - **Tab-scoped filters** — Dashboard and Sessions keep independent filter state.
 - **Sessions tab** — paginated table with free-text search across project, branch, model and session id; click any row for a drill-down modal with every assistant message and its individual cost.
 - **Multiple named budgets** (calendar-month). Up to 5 pinnable to the dashboard banner.
-- **OpenRouter pricing engine** — Anthropic-only models, periodic auto-sync, strict idempotent CRUD.
+- **OpenRouter pricing engine** — Anthropic and OpenAI model pricing, periodic auto-sync, strict idempotent CRUD.
+- **Codex ingestion** — optional `~/.codex/sessions` scanner for token_count events.
+- **RTK tab** — optional savings telemetry when `~/.local/share/rtk/history.db` is available.
 - **Container resource monitor** in the header — live host CPU %, memory %, Go goroutine count.
 - Confirmation modal on every destructive action.
 
@@ -126,7 +130,6 @@ curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/s
 ```bash
 git clone https://github.com/Bedatty-Engineering/amatoken.git
 cd amatoken
-export AMATOKEN_UID=$(id -u) AMATOKEN_GID=$(id -g)
 docker compose up --build -d
 ```
 
@@ -156,10 +159,13 @@ docker build -t amatoken .
 docker volume create amatoken-db
 
 docker run -d --name amatoken \
-  --user "$(id -u):$(id -g)" \
   -p 2002:2002 \
-  -v "$HOME/.claude/projects:/claude-projects:ro" \
+  -e CLAUDE_PROJECTS_DIR=/claude-projects   -e CODEX_SESSIONS_DIR=/codex-sessions   -e CODEX_MODEL=gpt-5-5   -e CODEX_MODELS_CACHE_PATH=/codex-home/models_cache.json   -e RTK_DB_PATH=/rtk-data/history.db   -v "$HOME/.claude/projects:/claude-projects"   -v "$HOME/.codex/sessions:/codex-sessions:ro" 
+  -v "$HOME/.local/share/rtk:/rtk-data" \
+  -v "$HOME/.codex:/codex-home:ro" \
   -v amatoken-db:/data \
+  -e RTK_DB_PATH=/rtk-data/history.db \
+  -e CODEX_MODELS_CACHE_PATH=/codex-home/models_cache.json \
   --restart unless-stopped \
   amatoken
 ```
@@ -170,6 +176,9 @@ No Docker, hot-iterate on the code:
 
 ```bash
 CLAUDE_PROJECTS_DIR=$HOME/.claude/projects \
+CODEX_SESSIONS_DIR=$HOME/.codex/sessions \
+CODEX_MODELS_CACHE_PATH=$HOME/.codex/models_cache.json \
+RTK_DB_PATH=$HOME/.local/share/rtk/history.db \
 DB_PATH=./amatoken.db \
   go run ./cmd/server
 ```
@@ -185,11 +194,15 @@ Environment variables (sensible defaults):
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `CLAUDE_PROJECTS_DIR` | `/claude-projects` | Where the JSONL files live inside the container (set by the volume mount). |
+| `CLAUDE_PROJECTS_DIR` | `/claude-projects` | Claude Code JSONL directory inside the container. |
+| `CODEX_SESSIONS_DIR` | empty | Codex session JSONL directory. Set to `/codex-sessions` by Compose. |
+| `CODEX_MODEL` | `gpt-5.5` | Default Codex model when the session file does not include one; normalized to dash form for pricing. |
 | `DB_PATH` | `/data/amatoken.db` | SQLite file path. |
 | `LISTEN_ADDR` | `:2002` | HTTP bind address. |
 | `RECONCILE_INTERVAL` | `60s` | Periodic full re-scan in case fsnotify missed an event. |
 | `PRICING_SYNC_INTERVAL` | `12h` | OpenRouter auto-sync cadence (only runs while the toggle is on). |
+| `CODEX_MODELS_CACHE_PATH` | empty | Optional path to Codex `models_cache.json` inside the mounted `.codex` directory; when readable, amatoken enriches context-window metadata for Codex models. |
+| `RTK_DB_PATH` | `/rtk-data/history.db` | Optional RTK SQLite database; when readable, the RTK section is enabled automatically. |
 | `AMATOKEN_PORT` | `2002` | Host-side port mapping (read by `docker-compose.yml`). |
 
 In-app settings (persisted in SQLite, editable from the UI):
@@ -223,7 +236,7 @@ In-app settings (persisted in SQLite, editable from the UI):
 | GET / POST / PUT / DELETE | `/api/budgets` | CRUD for budgets (`PUT` accepts `show_in_dashboard`). |
 | GET / PUT | `/api/settings` | Key/value app settings — `auto_refresh_enabled`, `pricing_auto_sync`. |
 | GET | `/api/resources` | Live container metrics: `cpu_pct_host`, `memory_pct_host`, `memoryMB`, `host_cpu_count`, `host_memory_total_mb`, `goroutines`. |
-| POST | `/api/ingest/refresh` | Force a full reconcile of `CLAUDE_PROJECTS_DIR`. |
+| POST | `/api/ingest/refresh` | Force a full reconcile of the Claude scanner. |
 
 Quick smoke test:
 
@@ -237,13 +250,15 @@ curl localhost:2002/api/pricing/status
 
 ## How ingestion works
 
-- Only lines with `type == "assistant"` and a `message.usage` block become rows. `type=user`, `tool_result`, etc. are ignored — they only contribute to the `input_tokens` of the **next** assistant message.
+- Claude ingestion: only lines with `type == "assistant"` and a `message.usage` block become rows. `type=user`, `tool_result`, etc. are ignored — they only contribute to the `input_tokens` of the **next** assistant message.
 - Synthetic events (`model == "<synthetic>"`) — context compactions, system prompts — are excluded from every aggregation.
 - Dedup is by `message.id` (`INSERT OR IGNORE`).
 - Per-file byte offset is stored in `ingest_state`; container restarts don't re-ingest.
-- `fsnotify` watches every subdir of `CLAUDE_PROJECTS_DIR` (with 500ms debounce). The reconcile tick (default 60s) catches events the watcher missed.
+- `fsnotify` watches every subdir of each configured scanner root with 500ms debounce. The reconcile tick (default 60s) catches events the watcher missed.
+- Codex ingestion is enabled only when `CODEX_SESSIONS_DIR` is set. It reads `session_meta` for cwd/session id and ingests `event_msg` records whose payload type is `token_count`.
+- RTK data is read from `RTK_DB_PATH` when configured; if the database is missing or unreadable, the RTK endpoints return empty/unavailable data and the app continues.
 
-**Project identity = `cwd`, not slug.** Claude Code names project directories after the cwd in which a session *started*, but the cwd inside the JSONL can change as you `cd` around mid-session. amatoken groups by the per-record `cwd` (falling back to project_slug when cwd is missing) so subprojects under the same starting directory show up as distinct rows.
+**Project identity = `cwd`, not slug.** In local session files, project directories can reflect where a session *started*, but the cwd inside the JSONL may change as you move around mid-session. amatoken groups by the per-record `cwd` (falling back to project_slug when cwd is missing) so subprojects under the same starting directory show up as distinct rows.
 
 ---
 
@@ -261,7 +276,7 @@ Three source levels with strict priority:
 
 `POST /api/pricing` is **strict** — it refuses to overwrite an existing row (returns `409`). Use `PUT` to edit.
 
-Model-id matching has fallbacks: exact match → strip `-YYYYMMDD` date suffix → walk up `-N` version segments. So `claude-haiku-4-5-20251001` resolves to `claude-haiku-4-5`. OpenRouter's `claude-opus-4.7` is auto-normalised to `claude-opus-4-7`.
+Model-id matching has fallbacks: exact match → strip `-YYYYMMDD` date suffix → walk up `-N` version segments. So `claude-haiku-4-5-20251001` resolves to `claude-haiku-4-5`. OpenRouter IDs such as `claude-opus-4.7` and `openai/gpt-4.1` are auto-normalised to dash-versioned local ids like `claude-opus-4-7` and `gpt-4-1`.
 
 ---
 
@@ -271,9 +286,10 @@ Model-id matching has fallbacks: exact match → strip `-YYYYMMDD` date suffix �
 amatoken/
 ├── cmd/server/main.go          # entrypoint, wiring, graceful shutdown
 ├── internal/
-│   ├── ingest/                 # parser, scanner, fsnotify watcher
+│   ├── ingest/                 # Claude/Codex parsers, scanners, fsnotify watcher
 │   ├── storage/                # SQLite open + migrations + repo (queries)
 │   ├── pricing/                # Provider, OpenRouter, Registry, Calculator
+│   ├── rtkgain/                # optional RTK history reader
 │   ├── seed/                   # First-run example budget + manual pricing
 │   └── httpapi/                # chi router, handlers, embedded static UI
 ├── assets/img/                 # logo, copied into static/ at build time
@@ -283,7 +299,7 @@ amatoken/
 └── README.md
 ```
 
-Stack: **Go 1.23**, **chi**, **modernc.org/sqlite** (pure Go, no CGO), **fsnotify**.
+Stack: **Go 1.23+**, **chi**, **modernc.org/sqlite** (pure Go, no CGO), **fsnotify**.
 Frontend: vanilla **Alpine.js** + **Chart.js** via CDN, served as `go:embed` static
 files. Final image is ~21 MB.
 
@@ -292,10 +308,11 @@ files. Final image is ~21 MB.
 ## Releases
 
 amatoken uses [semantic-release](https://semantic-release.gitbook.io/) wired
-through [`Bedatty-Engineering/modules-hub@v1`](https://github.com/Bedatty-Engineering/modules-hub).
-Versions are derived from Conventional Commits; binaries for
-`linux/{amd64,arm64}` and `darwin/{amd64,arm64}` are attached to each GitHub
-Release. Branch model: `main` → `latest` (stable), `dev` → `alpha` prereleases.
+through [`Bedatty-Engineering/modules-hub@v1.4.2`](https://github.com/Bedatty-Engineering/modules-hub).
+Versions are derived from Conventional Commits; the tag-triggered build workflow publishes binaries for
+`linux/{amd64,arm64}` and `darwin/{amd64,arm64}` to each GitHub Release and pushes a multi-arch image to
+`ghcr.io/Bedatty-Engineering/amatoken`. Branch model: `main` → `latest` (stable), `dev` → `alpha` prereleases.
+PR and workflow hygiene validation also runs through the reusable `modules-hub` validation workflow on PRs to `main` / `dev` and pushes to `main`.
 
 See **[`docs/RELEASE.md`](docs/RELEASE.md)** for the full setup (required
 secrets, GPG signing, dry-run instructions).
@@ -306,13 +323,14 @@ secrets, GPG signing, dry-run instructions).
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `open db: unable to open database file` | Container UID can't write to `/data`. | Use `--user "$(id -u):$(id -g)"` (already in compose). |
-| Dashboard empty despite JSONL existing | Container can't read `~/.claude/projects` (mode 700). | Same fix: run as your host UID. |
+| `open db: unable to open database file` | Container cannot write to `/data`. | Keep the bundled named volume `amatoken-db`, or ensure the mounted DB directory is writable. |
+| Dashboard empty despite JSONL existing | Source directory is missing, mounted at the wrong path, or unreadable. | Check `~/.claude/projects`, `~/.codex/sessions`, Compose volumes, and container logs. |
 | `port is already allocated` | Port 2002 taken. | Re-install with `-p 9090`, or `AMATOKEN_PORT=9090 docker compose up`. |
 | `unknown flag: --build` | Compose v2 plugin missing. | `sudo apt install docker-compose-v2`, or use the plain `docker run` flow. |
 | New session not appearing | fsnotify missed the create. | Click **Refresh now**, wait up to 60s, or `curl -X POST localhost:2002/api/ingest/refresh`. |
-| A model shows `$0.00` cost | No pricing row for that exact id, no fallback matched. | Click **Sync from OpenRouter**, or add the row manually in **Pricing**. |
+| A model shows `$0.00` cost | No pricing row for that exact id, no fallback matched. | Click **Sync from OpenRouter**, or add the row manually in **Pricing**. Check dot/dash model id normalization for Codex models. |
 | OpenRouter sync fails | Rate limit / network blip. | Cached values keep working; the next periodic tick retries. Check `GET /api/pricing/status`. |
+| RTK tab unavailable | `RTK_DB_PATH` is unset, missing, or unreadable. | Mount `~/.local/share/rtk` and verify `/rtk-data/history.db` exists in the container. |
 
 ---
 
@@ -323,10 +341,10 @@ amatoken is the *measurement* tool — but here's what tends to move the needle:
 - **Switch model per task.** Haiku for greps and renames, Sonnet for most coding work, Opus for architecture and tough debugging. The **Top models by spend** panel makes it obvious which model is eating your budget.
 - **Start a fresh session for unrelated work.** As context grows, occasional cache writes (priced ~1.25× input) add up. New session = clean cache.
 - **Be specific.** Vague prompts trigger exploration; precise file/line references skip it.
-- **`Read` with `offset`/`limit`** instead of letting Claude pull whole large files.
+- **`Read` with `offset`/`limit`** instead of letting the assistant pull whole large files.
 
 ---
 
 ## License
 
-© 2026 — All rights reserved. Self-hosted Claude usage monitor.
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).

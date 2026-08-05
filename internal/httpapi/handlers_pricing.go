@@ -125,3 +125,34 @@ func (s *Server) handleDeletePricing(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(204)
 }
+
+func (s *Server) handleFactoryResetPricing(w http.ResponseWriter, r *http.Request) {
+	if s.PricingRegistry == nil {
+		http.Error(w, "pricing sync not configured", 503)
+		return
+	}
+	model := chi.URLParam(r, "model")
+	if model == "" {
+		http.Error(w, "model required", 400)
+		return
+	}
+	res, err := s.PricingRegistry.ResetModel(r.Context(), model)
+	if err != nil {
+		http.Error(w, err.Error(), 502)
+		return
+	}
+	writeJSON(w, 200, res)
+}
+
+func (s *Server) handleFactoryResetAllPricing(w http.ResponseWriter, r *http.Request) {
+	if s.PricingRegistry == nil {
+		http.Error(w, "pricing sync not configured", 503)
+		return
+	}
+	res, err := s.PricingRegistry.ResetAll(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), 502)
+		return
+	}
+	writeJSON(w, 200, res)
+}

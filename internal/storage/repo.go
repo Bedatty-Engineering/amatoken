@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 )
 
@@ -47,6 +48,7 @@ type UsageRecord struct {
 	Cwd                 string
 	GitBranch           string
 	Model               string
+	Provider            string // "claude" or "codex"; defaults to "claude" if empty
 	Timestamp           time.Time
 	InputTokens         int64
 	OutputTokens        int64
@@ -57,12 +59,16 @@ type UsageRecord struct {
 }
 
 func (r *Repo) InsertUsage(ctx context.Context, u *UsageRecord) error {
+	provider := u.Provider
+	if provider == "" {
+		provider = "claude"
+	}
 	_, err := r.DB.ExecContext(ctx, `INSERT OR IGNORE INTO usage_records
-		(message_id, request_id, session_id, project_slug, cwd, git_branch, model, ts,
+		(message_id, request_id, session_id, project_slug, cwd, git_branch, model, provider, ts,
 		 input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, source_file, source_line)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		u.MessageID, nullStr(u.RequestID), u.SessionID, u.ProjectSlug, nullStr(u.Cwd), nullStr(u.GitBranch),
-		u.Model, u.Timestamp.UTC().Format(time.RFC3339Nano), u.InputTokens, u.OutputTokens, u.CacheCreationTokens, u.CacheReadTokens,
+		u.Model, provider, u.Timestamp.UTC().Format(time.RFC3339Nano), u.InputTokens, u.OutputTokens, u.CacheCreationTokens, u.CacheReadTokens,
 		u.SourceFile, u.SourceLine)
 	return err
 }
@@ -132,12 +138,12 @@ func (f Filters) where() (string, []any) {
 }
 
 type Summary struct {
-	InputTokens         int64 `json:"input_tokens"`
-	OutputTokens        int64 `json:"output_tokens"`
-	CacheCreationTokens int64 `json:"cache_creation_tokens"`
-	CacheReadTokens     int64 `json:"cache_read_tokens"`
-	Sessions            int64 `json:"sessions"`
-	Messages            int64 `json:"messages"`
+	InputTokens         int64   `json:"input_tokens"`
+	OutputTokens        int64   `json:"output_tokens"`
+	CacheCreationTokens int64   `json:"cache_creation_tokens"`
+	CacheReadTokens     int64   `json:"cache_read_tokens"`
+	Sessions            int64   `json:"sessions"`
+	Messages            int64   `json:"messages"`
 	CostUSD             float64 `json:"cost_usd"`
 }
 
@@ -525,12 +531,12 @@ func (r *Repo) ListSessionRecords(ctx context.Context, sessionID string) ([]Sess
 }
 
 type Budget struct {
-	ID               int64     `json:"id"`
-	Name             string    `json:"name"`
-	AmountUSD        float64   `json:"amount_usd"`
-	ShowInDashboard  bool      `json:"show_in_dashboard"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID              int64     `json:"id"`
+	Name            string    `json:"name"`
+	AmountUSD       float64   `json:"amount_usd"`
+	ShowInDashboard bool      `json:"show_in_dashboard"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 func (r *Repo) ListBudgets(ctx context.Context) ([]Budget, error) {
@@ -621,12 +627,62 @@ func (r *Repo) DeleteRecord(ctx context.Context, id int64) error {
 	return err
 }
 
+func sqlListPlaceholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.TrimRight(strings.Repeat("?,", n), ",")
+}
+
+func (r *Repo) SessionSourceFiles(ctx context.Context, sessionID string) ([]string, error) {
+	rows, err := r.DB.QueryContext(ctx, `SELECT DISTINCT source_file FROM usage_records WHERE session_id = ? ORDER BY source_file`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		out = append(out, path)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repo) DeleteRecordsBySourceFiles(ctx context.Context, files []string) error {
+	if len(files) == 0 {
+		return nil
+	}
+	args := make([]any, 0, len(files))
+	for _, file := range files {
+		args = append(args, file)
+	}
+	_, err := r.DB.ExecContext(ctx, `DELETE FROM usage_records WHERE source_file IN (`+sqlListPlaceholders(len(files))+`)`, args...)
+	return err
+}
+
+func (r *Repo) DeleteIngestStateBySourceFiles(ctx context.Context, files []string) error {
+	if len(files) == 0 {
+		return nil
+	}
+	args := make([]any, 0, len(files))
+	for _, file := range files {
+		args = append(args, file)
+	}
+	_, err := r.DB.ExecContext(ctx, `DELETE FROM ingest_state WHERE source_file IN (`+sqlListPlaceholders(len(files))+`)`, args...)
+	return err
+}
+
 type Pricing struct {
 	Model                string     `json:"model"`
 	InputPerMTokUSD      float64    `json:"input_per_mtok_usd"`
 	OutputPerMTokUSD     float64    `json:"output_per_mtok_usd"`
 	CacheWritePerMTokUSD float64    `json:"cache_write_per_mtok_usd"`
 	CacheReadPerMTokUSD  float64    `json:"cache_read_per_mtok_usd"`
+	ContextLength        int64      `json:"context_length"`
+	MaxOutputTokens      int64      `json:"max_output_tokens"`
 	Source               string     `json:"source"`
 	FetchedAt            *time.Time `json:"fetched_at,omitempty"`
 	UpdatedAt            *time.Time `json:"updated_at,omitempty"`
@@ -634,7 +690,7 @@ type Pricing struct {
 
 func (r *Repo) ListPricing(ctx context.Context) ([]Pricing, error) {
 	rows, err := r.DB.QueryContext(ctx, `SELECT model, input_per_mtok_usd, output_per_mtok_usd,
-		cache_write_per_mtok_usd, cache_read_per_mtok_usd,
+		cache_write_per_mtok_usd, cache_read_per_mtok_usd, COALESCE(context_length, 0), COALESCE(max_output_tokens, 0),
 		COALESCE(source, 'manual'), COALESCE(fetched_at, ''), COALESCE(updated_at, '')
 		FROM model_pricing ORDER BY model`)
 	if err != nil {
@@ -646,7 +702,7 @@ func (r *Repo) ListPricing(ctx context.Context) ([]Pricing, error) {
 		var p Pricing
 		var fetchedAt, updatedAt string
 		if err := rows.Scan(&p.Model, &p.InputPerMTokUSD, &p.OutputPerMTokUSD,
-			&p.CacheWritePerMTokUSD, &p.CacheReadPerMTokUSD,
+			&p.CacheWritePerMTokUSD, &p.CacheReadPerMTokUSD, &p.ContextLength, &p.MaxOutputTokens,
 			&p.Source, &fetchedAt, &updatedAt); err != nil {
 			return nil, err
 		}
@@ -676,19 +732,54 @@ func (r *Repo) UpsertPricing(ctx context.Context, p Pricing) error {
 		fetchedAt = p.FetchedAt.UTC().Format(time.RFC3339Nano)
 	}
 	_, err := r.DB.ExecContext(ctx, `INSERT INTO model_pricing(model, input_per_mtok_usd, output_per_mtok_usd,
-		cache_write_per_mtok_usd, cache_read_per_mtok_usd, source, fetched_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		cache_write_per_mtok_usd, cache_read_per_mtok_usd, context_length, max_output_tokens, source, fetched_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(model) DO UPDATE SET
 			input_per_mtok_usd=excluded.input_per_mtok_usd,
 			output_per_mtok_usd=excluded.output_per_mtok_usd,
 			cache_write_per_mtok_usd=excluded.cache_write_per_mtok_usd,
 			cache_read_per_mtok_usd=excluded.cache_read_per_mtok_usd,
+			context_length=excluded.context_length,
+			max_output_tokens=excluded.max_output_tokens,
 			source=excluded.source,
 			fetched_at=excluded.fetched_at,
 			updated_at=excluded.updated_at`,
 		p.Model, p.InputPerMTokUSD, p.OutputPerMTokUSD, p.CacheWritePerMTokUSD, p.CacheReadPerMTokUSD,
-		p.Source, fetchedAt, time.Now().UTC().Format(time.RFC3339Nano))
+		p.ContextLength, p.MaxOutputTokens, p.Source, fetchedAt, time.Now().UTC().Format(time.RFC3339Nano))
 	return err
+}
+
+type ObservedContextWindow struct {
+	Model            string `json:"model"`
+	Sessions         int64  `json:"sessions"`
+	Messages         int64  `json:"messages"`
+	PeakPromptTokens int64  `json:"peak_prompt_tokens"`
+	PeakOutputTokens int64  `json:"peak_output_tokens"`
+	PeakTotalTokens  int64  `json:"peak_total_tokens"`
+}
+
+func (r *Repo) ObservedContextWindows(ctx context.Context, f Filters) ([]ObservedContextWindow, error) {
+	w, args := f.where()
+	rows, err := r.DB.QueryContext(ctx, `SELECT model,
+			COUNT(DISTINCT session_id),
+			COUNT(*),
+			COALESCE(MAX(input_tokens + cache_creation_tokens + cache_read_tokens),0),
+			COALESCE(MAX(output_tokens),0),
+			COALESCE(MAX(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens),0)
+		FROM usage_records`+w+` GROUP BY model ORDER BY model`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ObservedContextWindow
+	for rows.Next() {
+		var row ObservedContextWindow
+		if err := rows.Scan(&row.Model, &row.Sessions, &row.Messages, &row.PeakPromptTokens, &row.PeakOutputTokens, &row.PeakTotalTokens); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
 
 func (r *Repo) DeletePricing(ctx context.Context, model string) error {

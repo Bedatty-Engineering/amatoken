@@ -89,6 +89,9 @@ fi
 if [ ! -d "$HOME/.claude/projects" ]; then
   warn "$HOME/.claude/projects does not exist yet — amatoken will start, but the dashboard stays empty until Claude Code logs at least one session."
 fi
+if [ ! -f "$HOME/.codex/models_cache.json" ]; then
+  warn "$HOME/.codex/models_cache.json was not found — Codex-specific context metadata will stay unavailable until Codex refreshes its model cache on this machine."
+fi
 
 # --- fetch source --------------------------------------------------------
 if [ -d "$INSTALL_DIR/.git" ]; then
@@ -107,11 +110,8 @@ ok "Source ready"
 cd "$INSTALL_DIR"
 
 # --- build & run ---------------------------------------------------------
-# docker-compose.yml reads AMATOKEN_PORT, AMATOKEN_UID and AMATOKEN_GID.
-# (UID is readonly in bash, so we use namespaced env vars instead.)
+# docker-compose.yml reads AMATOKEN_PORT.
 export AMATOKEN_PORT="$PORT"
-export AMATOKEN_UID="$(id -u)"
-export AMATOKEN_GID="$(id -g)"
 info "Host port → $PORT (container listens on 2002)"
 
 if [ -n "$COMPOSE" ]; then
@@ -124,10 +124,14 @@ else
   docker rm -f amatoken >/dev/null 2>&1 || true
   info "Starting container"
   docker run -d --name amatoken \
-    --user "$(id -u):$(id -g)" \
+    --user "0:0" \
     -p "${PORT}:2002" \
-    -v "$HOME/.claude/projects:/claude-projects:ro" \
+    -v "$HOME/.claude/projects:/claude-projects" \
+    -v "$HOME/.local/share/rtk:/rtk-data" \
+    -v "$HOME/.codex:/codex-home:ro" \
     -v amatoken-db:/data \
+    -e RTK_DB_PATH=/rtk-data/history.db \
+    -e CODEX_MODELS_CACHE_PATH=/codex-home/models_cache.json \
     --restart unless-stopped \
     amatoken
 fi

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>amatoken — Claude usage</title>
+<title>amatoken — AI cost, usage and sessions</title>
 <link rel="icon" type="image/png" href="/logo.png" />
 <link rel="stylesheet" href="/styles.css" />
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
@@ -22,6 +22,7 @@
       <button :class="tab==='sessions' && 'active'" @click="tab='sessions'">Sessions</button>
       <button :class="tab==='budgets' && 'active'" @click="tab='budgets'">Budgets</button>
       <button :class="tab==='pricing' && 'active'" @click="tab='pricing'">Pricing</button>
+      <button :class="tab==='savings' && 'active'" @click="tab='savings'; loadRTK()">Savings</button>
       <span class="action-group has-tooltip">
         <button class="ghost" @click="refresh()" :disabled="refreshing">Refresh now</button>
         <span class="action-feedback">
@@ -48,7 +49,7 @@
             <dd>
               When on, the UI polls Refresh every <strong>60s</strong> in the background. Same
               cadence as the server-side reconcile tick. Off by default — turn on if you keep
-              the dashboard open during long Claude Code sessions and want totals to keep
+              the dashboard open during long agent sessions and want totals to keep
               updating without manual clicks. Setting is persisted server-side.
             </dd>
           </dl>
@@ -93,7 +94,7 @@
     </div>
   </header>
 
-  <div class="budget-bar" x-show="dashboardBudgets().length > 0 && tab==='dashboard'">
+  <div class="budget-bar" x-show="dashboardBudgets().length > 0">
     <template x-for="b in dashboardBudgets()" :key="b.id">
       <div class="budget-bar-inner">
         <span class="budget-label" x-text="`${b.name}: ${fmtUSD(b.amount_usd)}`"></span>
@@ -134,6 +135,28 @@
         <template x-for="m in options.models" :key="m"><option :value="m" x-text="m"></option></template>
       </select>
     </label>
+  </section>
+
+  <section class="savings-header" x-show="tab==='savings'">
+    <h2>Savings</h2>
+    <div class="filters savings-filters">
+      <label>Period
+        <select x-model="filters.savings.range" @change="loadRTK()">
+          <option value="all">All time</option>
+          <option value="24h">Last 24 hours</option>
+          <option value="7d">Last 7 days</option>
+          <option value="30d">Last 30 days</option>
+          <option value="month">This month</option>
+          <option value="custom">Custom…</option>
+        </select>
+      </label>
+      <template x-if="filters.savings.range==='custom'">
+        <span class="custom-range">
+          <label>From <input type="date" x-model="filters.savings.from" @change="loadRTK()"/></label>
+          <label>To <input type="date" x-model="filters.savings.to" @change="loadRTK()"/></label>
+        </span>
+      </template>
+    </div>
   </section>
 
   <main x-show="tab==='dashboard'">
@@ -190,8 +213,41 @@
   <main x-show="tab==='sessions'">
     <div class="toolbar">
       <span class="search-input">
-        <input type="search" placeholder="Search project, branch, model, session id…" x-model="filters.sessions.search" @input.debounce.300ms="searchChanged()"/>
+        <input type="text" placeholder="Search project, branch, model, session id…" x-model="filters.sessions.search" @input.debounce.300ms="searchChanged()"/>
         <button class="ghost" x-show="filters.sessions.search" @click="filters.sessions.search=''; searchChanged()" title="Clear">✕</button>
+      </span>
+      <label class="toolbar-select">
+        <select x-model="sessionsSort" @change="sessionsSortChanged()">
+          <option value="last_seen_desc">Newest activity</option>
+          <option value="cost_desc">Highest cost</option>
+          <option value="cost_asc">Lowest cost</option>
+          <option value="messages_desc">Most messages</option>
+          <option value="messages_asc">Fewest messages</option>
+        </select>
+      </label>
+      <span class="action-group has-tooltip">
+        <button @click="exportAllSessions()">Export all sessions</button>
+        <div class="resource-tooltip nav-tooltip" role="tooltip">
+          <h4>Export all sessions</h4>
+          <dl>
+            <dt>What it does</dt>
+            <dd>Builds one migration <strong>.tgz bundle</strong> with every session file from <code>~/.claude/projects</code>, plus <code>history.jsonl</code>, <code>session-env</code>, and <code>file-history</code>.</dd>
+            <dt>When to use</dt>
+            <dd>Use this before changing computers so you can restore local session history in one import.</dd>
+          </dl>
+        </div>
+      </span>
+      <span class="action-group">
+        <input x-ref="sessionImport" type="file" accept=".tgz,.tar.gz,.jsonl,.ndjson,text/plain,application/x-ndjson,application/gzip,application/x-gzip" @change="importSessionFile($event)" style="display:none"/>
+        <button @click="triggerSessionImport()" :disabled="importingSession">
+          <span x-show="!importingSession">Import bundle</span>
+          <span x-show="importingSession">Importing…</span>
+        </button>
+        <span class="action-feedback">
+          <span x-show="importingSession" class="spinner"></span>
+          <span x-show="!importingSession && importSessionState==='success'" class="status-icon ok">✓</span>
+          <span x-show="!importingSession && importSessionState==='error'" class="status-icon err">✗</span>
+        </span>
       </span>
       <span class="status" x-show="total > 0" x-text="`${total.toLocaleString()} ${total === 1 ? 'session' : 'sessions'} match`"></span>
     </div>
@@ -274,6 +330,36 @@
 
   <main x-show="tab==='pricing'">
     <div class="toolbar">
+      <span class="search-input">
+        <input type="text" placeholder="Search model…" x-model="pricingSearch" @input.debounce.200ms="pricingSearchChanged()"/>
+        <button class="ghost" x-show="pricingSearch" @click="pricingSearch=''; pricingSearchChanged()" title="Clear">✕</button>
+      </span>
+      <label class="toolbar-select">
+        <select x-model="pricingSource" @change="pricingSourceChanged()">
+          <option value="">All sources</option>
+          <template x-for="source in pricingSources()" :key="source">
+            <option :value="source" x-text="source.toUpperCase()"></option>
+          </template>
+        </select>
+      </label>
+      <label class="toolbar-select">
+        <select x-model="pricingProvider" @change="pricingProviderChanged()">
+          <option value="">All companies</option>
+          <template x-for="provider in pricingProviders()" :key="provider">
+            <option :value="provider" x-text="provider"></option>
+          </template>
+        </select>
+      </label>
+      <label class="toolbar-select">
+        <select x-model="pricingSort" @change="pricingSortChanged()">
+          <option value="price_desc">Most expensive</option>
+          <option value="price_asc">Cheapest</option>
+        </select>
+      </label>
+      <button class="pricing-create-toggle" :class="pricingCreateOpen && 'active'" @click="pricingCreateOpen = !pricingCreateOpen" :aria-expanded="pricingCreateOpen">
+        <span x-text="pricingCreateOpen ? 'Hide manual cost' : 'New manual cost'"></span>
+        <span class="pricing-create-toggle-icon" x-text="pricingCreateOpen ? '−' : '+'"></span>
+      </button>
       <span class="action-group">
         <button @click="syncPricing()" :disabled="syncing">Sync from OpenRouter</button>
         <span class="action-feedback">
@@ -282,17 +368,56 @@
           <span x-show="!syncing && syncState==='error'" class="status-icon err">✗</span>
         </span>
       </span>
+      <span class="action-group has-tooltip">
+        <button class="factory-btn" @click="factoryResetAllPricing()" :disabled="syncing">Factory</button>
+        <div class="resource-tooltip nav-tooltip" role="tooltip">
+          <h4>Factory pricing</h4>
+          <dl>
+            <dt>What it does</dt>
+            <dd>Restores every model to its factory pricing source and removes manual edits.</dd>
+            <dt>Effect</dt>
+            <dd>Provider-managed rows are refreshed with official values. Models without a factory source are kept unchanged.</dd>
+          </dl>
+        </div>
+      </span>
       <label class="toggle" title="Run sync automatically every 12h">
         <input type="checkbox" x-model="autoSync" @change="toggleAutoSync()"/>
         <span>Auto-sync</span>
       </label>
+      <span class="status" x-show="filteredPricing().length > 0" x-text="`${filteredPricing().length.toLocaleString()} ${filteredPricing().length === 1 ? 'model' : 'models'} match`"></span>
       <span class="status" x-text="pricingStatusText()"></span>
     </div>
-    <p class="hint">Prices in USD per 1M tokens, ordered <strong>most expensive first</strong> (output rate). Manual rows are <em>never</em> overwritten by sync.</p>
+    <p class="hint">Prices in USD per 1M tokens. Sort uses output price first, with input price as tie-breaker. Manual rows are <em>never</em> overwritten by sync.</p>
+    <section class="pricing-create-panel" x-show="pricingCreateOpen">
+      <div class="pricing-create">
+        <span class="pricing-create-label">Manual pricing entry</span>
+        <label class="pricing-field">
+          <span>Model</span>
+          <input placeholder="Model name" x-model="newPricing.model"/>
+        </label>
+        <label class="pricing-field">
+          <span>Input</span>
+          <span class="currency-input"><input type="number" step="0.001" placeholder="0" x-model.number="newPricing.input_per_mtok_usd"/></span>
+        </label>
+        <label class="pricing-field">
+          <span>Output</span>
+          <span class="currency-input"><input type="number" step="0.001" placeholder="0" x-model.number="newPricing.output_per_mtok_usd"/></span>
+        </label>
+        <label class="pricing-field">
+          <span>Cache write</span>
+          <span class="currency-input"><input type="number" step="0.001" placeholder="0" x-model.number="newPricing.cache_write_per_mtok_usd"/></span>
+        </label>
+        <label class="pricing-field">
+          <span>Cache read</span>
+          <span class="currency-input"><input type="number" step="0.001" placeholder="0" x-model.number="newPricing.cache_read_per_mtok_usd"/></span>
+        </label>
+        <button @click="addPricing()">Add</button>
+      </div>
+    </section>
     <table class="data">
       <thead><tr><th>Model</th><th>Source</th><th>Updated</th><th>Input</th><th>Output</th><th>Cache write</th><th>Cache read</th><th></th></tr></thead>
       <tbody>
-        <template x-for="(p, i) in sortedPricing()" :key="p.model">
+        <template x-for="p in pagedPricing()" :key="p.model">
           <tr>
             <td x-text="p.model"></td>
             <td><span class="source-badge" :class="p.source" x-text="p.source"></span></td>
@@ -313,21 +438,156 @@
                   <span x-show="!p._saving && p._saveState==='error'" class="status-icon err">✗</span>
                 </span>
               </span>
+              <span class="action-group has-tooltip">
+                <button class="factory-btn" @click="factoryResetPricing(p)" :disabled="p._resetting">
+                  <span x-show="!p._resetting">Factory</span>
+                  <span x-show="p._resetting">Restoring…</span>
+                </button>
+                <div class="resource-tooltip nav-tooltip" role="tooltip">
+                  <h4>Factory pricing</h4>
+                  <dl>
+                    <dt>What it does</dt>
+                    <dd>Restores this model to its factory pricing source.</dd>
+                    <dt>Effect</dt>
+                    <dd>Manual edits are removed. If no factory source exists for this model, the row is kept unchanged.</dd>
+                  </dl>
+                </div>
+              </span>
               <button class="danger" @click="deletePricing(p)">Delete</button>
             </td>
           </tr>
         </template>
-        <tr>
-          <td><input placeholder="claude-..." x-model="newPricing.model"/></td>
-          <td colspan="2" class="hint">manual (new)</td>
-          <td><span class="currency-input"><input type="number" step="0.001" x-model.number="newPricing.input_per_mtok_usd"/></span></td>
-          <td><span class="currency-input"><input type="number" step="0.001" x-model.number="newPricing.output_per_mtok_usd"/></span></td>
-          <td><span class="currency-input"><input type="number" step="0.001" x-model.number="newPricing.cache_write_per_mtok_usd"/></span></td>
-          <td><span class="currency-input"><input type="number" step="0.001" x-model.number="newPricing.cache_read_per_mtok_usd"/></span></td>
-          <td><button @click="addPricing()">Add</button></td>
-        </tr>
       </tbody>
     </table>
+    <div class="pager">
+      <button :disabled="pricingPage<=1" @click="goPricingPage(1)" title="First">«</button>
+      <button :disabled="pricingPage<=1" @click="goPricingPage(pricingPage-1)" title="Previous">‹</button>
+      <template x-for="n in pricingPageWindow()" :key="n">
+        <button :class="n===pricingPage && 'active'" @click="goPricingPage(n)" x-text="n"></button>
+      </template>
+      <button :disabled="pricingPage>=pricingPages" @click="goPricingPage(pricingPage+1)" title="Next">›</button>
+      <button :disabled="pricingPage>=pricingPages" @click="goPricingPage(pricingPages)" title="Last">»</button>
+      <span class="meta" x-text="`Page ${pricingPage} of ${pricingPages} · ${filteredPricing().length.toLocaleString()} ${filteredPricing().length === 1 ? 'model' : 'models'}`"></span>
+    </div>
+  </main>
+
+  <main x-show="tab==='savings'">
+    <section class="savings-section">
+      <h3 class="savings-section-title">
+        <span class="savings-section-name">RTK</span>
+        <span class="savings-section-sub">Rust Token Killer</span>
+      </h3>
+
+    <div class="notice" x-show="rtkSummary && rtkSummary.status === 'not_installed'">
+      <strong>RTK: Not installed</strong> Required install to enable this section.
+      Install RTK from <a href="https://github.com/rtk-ai/rtk" target="_blank" rel="noreferrer noopener">github.com/rtk-ai/rtk</a>,
+      run <code>rtk gain</code> at least once, and then expose its database to amatoken.
+    </div>
+
+    <div class="notice" x-show="rtkSummary && rtkSummary.status === 'unavailable'">
+      <strong>RTK configured but unavailable.</strong>
+      Ensure <code>~/.local/share/rtk/history.db</code> exists and verify the volume mount in
+      <code>docker-compose.yml</code>:<br/>
+      <code>- ${HOME}/.local/share/rtk:/rtk-data</code>
+      <span x-show="rtkSummary && rtkSummary.detail"><br/>Detail: <code x-text="rtkSummary.detail"></code></span>
+    </div>
+
+    <!-- main content: x-show keeps the DOM (incl. #rtkChart canvas) alive at all times -->
+    <div x-show="rtkSummary && rtkSummary.available">
+
+      <div class="cards">
+        <div class="card clickable" @click="openRTKCard('saved')" title="Click for daily breakdown">
+          <span>Tokens saved</span>
+          <strong x-text="fmtTokens(rtkSummary?.saved_tokens || 0)"></strong>
+          <small class="delta" :class="rtkDeltaClass(rtkTrend?.savedTokens)" x-text="rtkDeltaText(rtkTrend?.savedTokens)"></small>
+          <small style="display:block;color:var(--muted);font-size:.75rem;margin-top:.1rem" x-text="`${(rtkSummary?.savings_pct || 0).toFixed(1)}% efficiency`"></small>
+        </div>
+        <div class="card clickable" @click="openRTKCard('commands')" title="Click for daily breakdown">
+          <span>Commands intercepted</span>
+          <strong x-text="(rtkSummary?.total_commands || 0).toLocaleString()"></strong>
+          <small class="delta" :class="rtkDeltaClass(rtkTrend?.commands)" x-text="rtkDeltaText(rtkTrend?.commands)"></small>
+          <small style="display:block;color:var(--muted);font-size:.75rem;margin-top:.1rem" x-text="`Input: ${fmtTokens(rtkSummary?.input_tokens || 0)}`"></small>
+        </div>
+        <div class="card clickable" @click="openRTKCard('time')" title="Click for daily breakdown">
+          <span>Time saved</span>
+          <strong x-text="`${((rtkSummary?.total_time_ms || 0) / 60000).toFixed(1)}m`"></strong>
+          <small class="delta" :class="rtkDeltaClass(rtkTrend?.timeMs)" x-text="rtkDeltaText(rtkTrend?.timeMs)"></small>
+          <small style="display:block;color:var(--muted);font-size:.75rem;margin-top:.1rem" x-text="`${((rtkSummary?.total_time_ms || 0) / 1000 / (rtkSummary?.total_commands || 1)).toFixed(1)}s/cmd`"></small>
+        </div>
+      </div>
+
+      <div class="rtk-meter">
+        <div class="rtk-meter-label">
+          <span class="rtk-meter-info-wrap" x-data="{ tip: false }" @mouseenter="tip=true" @mouseleave="tip=false">
+            Efficiency
+            <span class="rtk-info-icon">ℹ</span>
+            <div class="rtk-info-tip" x-show="tip" x-cloak>
+              <strong>Efficiency = saved ÷ (saved + output) × 100</strong>
+              <p>Percentage of output tokens that RTK compressed before they reached the target assistant. Higher is better.</p>
+              <dl>
+                <dt>saved</dt><dd>tokens that were filtered out by RTK and never sent</dd>
+                <dt>output</dt><dd>tokens that were actually delivered to the target assistant</dd>
+                <dt>100%</dt><dd>all output was filtered (e.g. binary/noise commands)</dd>
+                <dt>0%</dt><dd>nothing was filtered — full output passed through</dd>
+              </dl>
+            </div>
+          </span>
+          <strong x-text="`${(rtkSummary?.savings_pct || 0).toFixed(1)}%`"></strong>
+        </div>
+        <div class="rtk-meter-bar">
+          <div class="rtk-meter-fill" :style="`width: ${Math.min(rtkSummary?.savings_pct || 0, 100)}%`"></div>
+        </div>
+      </div>
+
+      <!-- chart always in DOM; hidden via x-show when no data -->
+      <div class="chart-container" x-show="rtkTimeseries.length > 0">
+        <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.5rem;">
+          <h3 style="margin:0">Daily savings</h3>
+          <span x-show="rtkCommandFilter" class="rtk-filter-pill">
+            <span x-text="rtkCommandFilter && rtkCommandFilter.length > 40 ? rtkCommandFilter.slice(0,37)+'...' : rtkCommandFilter"></span>
+            <button @click.stop="filterRTKCommand(rtkCommandFilter)" title="Clear filter">✕</button>
+          </span>
+        </div>
+        <canvas id="rtkChart" style="max-width:100%;max-height:400px;"></canvas>
+      </div>
+
+      <div x-show="rtkCommands.length > 0">
+        <h3>By Command</h3>
+        <table class="data">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Command</th>
+              <th class="num">Count</th>
+              <th class="num">Saved</th>
+              <th class="num">Avg %</th>
+              <th class="num">Time</th>
+              <th>Impact</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="c in rtkCommands" :key="c.rank">
+              <tr class="clickable" :class="rtkCommandFilter === c.command && 'selected'" @click="filterRTKCommand(c.command)" :title="rtkCommandFilter === c.command ? 'Click to clear filter' : 'Filter chart by this command'">
+                <td x-text="c.rank"></td>
+                <td class="cmd-cell" x-text="c.command.length > 45 ? c.command.slice(0,42)+'...' : c.command" :title="c.command"></td>
+                <td class="num" x-text="c.count.toLocaleString()"></td>
+                <td class="num" x-text="fmtTokens(c.saved_tokens)"></td>
+                <td class="num" x-text="`${(c.savings_pct || 0).toFixed(1)}%`"></td>
+                <td class="num" x-text="c.total_time_ms >= 60000 ? `${(c.total_time_ms/60000).toFixed(1)}m` : c.total_time_ms >= 1000 ? `${(c.total_time_ms/1000).toFixed(1)}s` : `${c.total_time_ms}ms`"></td>
+                <td>
+                  <div class="impact-bar-wrap">
+                    <div class="impact-bar" :style="`width: ${Math.min(c.impact_pct || 0, 100)}%`"></div>
+                  </div>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+
+    </div><!-- /RTK available -->
+    </section><!-- /RTK -->
+
   </main>
 
   <div class="modal-backdrop" x-show="drilldown.open" @click.self="closeDrilldown()" x-cloak>
@@ -345,24 +605,102 @@
             <strong x-text="drilldown.session && fmtUSD(drilldown.session.cost_usd)"></strong>
           </p>
         </div>
-        <button class="ghost" @click="closeDrilldown()">Close</button>
+        <div class="action-group">
+          <span class="action-group has-tooltip modal-action-help">
+            <button class="export-btn" @click="exportSession(drilldown.session)" :disabled="drilldown.loading || !drilldown.session">Export bundle</button>
+            <div class="resource-tooltip modal-tooltip" role="tooltip">
+              <h4>Export bundle</h4>
+              <dl>
+                <dt>What it does</dt>
+                <dd>Builds a portable <strong>.tgz bundle</strong> for the selected session.</dd>
+                <dt>Includes</dt>
+                <dd>Session transcript, matching <code>history.jsonl</code> entries, and auxiliary <code>session-env</code> / <code>file-history</code> artifacts when they exist.</dd>
+                <dt>Why use it</dt>
+                <dd>Lets you restore the session on another machine and keep it visible again in local resume and history flows.</dd>
+              </dl>
+            </div>
+          </span>
+          <span class="action-group has-tooltip modal-action-help">
+            <button class="danger" @click="openSessionDeleteModal(drilldown.session)" :disabled="drilldown.loading || !drilldown.session">
+              <span x-show="!drilldown.deleting">Delete permanently</span>
+              <span x-show="drilldown.deleting">Deleting…</span>
+            </button>
+            <div class="resource-tooltip modal-tooltip" role="tooltip">
+              <h4>Delete permanently</h4>
+              <dl>
+                <dt>What it does</dt>
+                <dd>Removes the session transcript and matching local history artifacts from storage.</dd>
+                <dt>Effect</dt>
+                <dd>The session disappears from the amatoken dashboard and should stop appearing in local resume and history flows.</dd>
+                <dt>Backup</dt>
+                <dd>Use the checkbox in the confirmation modal if you want backup files and directories before deletion.</dd>
+              </dl>
+            </div>
+          </span>
+          <button class="ghost" @click="closeDrilldown()">Close</button>
+        </div>
       </header>
       <div class="modal-body">
         <details class="info-panel">
           <summary>What am I looking at?</summary>
-          <p>One row per <strong>assistant message</strong> in this session — the granular events that Anthropic actually charges for. Synthetic events (context compaction, system prompts) are excluded.</p>
+          <p>One row per <strong>assistant message</strong> in this session — the granular events that the AI provider actually charges for. Synthetic events (context compaction, system prompts) are excluded.</p>
           <dl class="info-grid">
             <dt>Time</dt><dd>When the response was generated.</dd>
             <dt>Model</dt><dd>Which model answered. Can vary mid-session if you used <code>/model</code>.</dd>
             <dt>Branch</dt><dd>Git branch at that moment. May change if you switched branches mid-session.</dd>
             <dt>Input</dt><dd>New tokens you sent in this request. Priced at <em>base</em> rate.</dd>
-            <dt>Output</dt><dd>Tokens Claude generated. Priced at ~5× input rate — usually the biggest cost driver.</dd>
+            <dt>Output</dt><dd>Tokens the assistant generated. Often priced above input rate — usually the biggest cost driver.</dd>
             <dt>Cache R/W</dt><dd>Cache read (cheap, ~10% of input rate) plus cache write (expensive, ~125% of input rate). Lots of cache <strong>writes</strong> = context kept changing.</dd>
             <dt>Cost</dt><dd>Per-message cost in USD using the active pricing table. Sums up to the session total in the header.</dd>
           </dl>
           <p class="hint">Use this to spot which specific messages dominate the bill — a single 5k-output reply on Opus can cost $0.15+ alone. The raw conversation text isn't shown here; that's in the JSONL file on disk.</p>
         </details>
         <p x-show="drilldown.loading" class="hint">Loading…</p>
+        <section class="session-context-block" x-show="!drilldown.loading && sessionContextRows().length > 0">
+          <h4>Context window</h4>
+          <div class="cards session-context-cards">
+            <div class="card">
+              <span>Peak prompt</span>
+              <strong x-text="sessionContextSummary().peak_prompt_tokens.toLocaleString()"></strong>
+            </div>
+            <div class="card">
+              <span>Peak total</span>
+              <strong x-text="sessionContextSummary().peak_total_tokens.toLocaleString()"></strong>
+            </div>
+            <div class="card">
+              <span>Largest context</span>
+              <strong x-text="sessionContextSummary().largest_context_length ? sessionContextSummary().largest_context_length.toLocaleString() : '—'"></strong>
+            </div>
+            <div class="card">
+              <span>Highest occupancy</span>
+              <strong x-text="sessionContextSummary().largest_context_length ? `${sessionContextSummary().highest_occupancy_pct.toFixed(1)}%` : '—'"></strong>
+            </div>
+          </div>
+          <p class="hint">Estimated occupancy uses the largest <strong>prompt-side token load</strong> observed for each model in this session: input + cache write + cache read, divided by that model's known context window.</p>
+          <table class="data compact session-context-table">
+            <thead><tr><th>Model</th><th>Company</th><th>Context window</th><th>Max output</th><th>Peak prompt</th><th>Peak output</th><th>Peak total</th><th>Occupancy</th><th>Messages</th></tr></thead>
+            <tbody>
+              <template x-for="row in sessionContextRows()" :key="row.model">
+                <tr>
+                  <td x-text="row.model"></td>
+                  <td x-text="row.company"></td>
+                  <td x-text="row.context_length ? row.context_length.toLocaleString() : '—'"></td>
+                  <td x-text="row.max_output_tokens ? row.max_output_tokens.toLocaleString() : '—'"></td>
+                  <td x-text="row.peak_prompt_tokens.toLocaleString()"></td>
+                  <td x-text="row.peak_output_tokens.toLocaleString()"></td>
+                  <td x-text="row.peak_total_tokens.toLocaleString()"></td>
+                  <td>
+                    <div class="budget-track inline">
+                      <div class="budget-fill" :class="row.occupancy_pct >= 85 ? 'over' : row.occupancy_pct >= 60 ? 'warn' : 'ok'" :style="`width: ${Math.min(row.occupancy_pct, 100).toFixed(1)}%`"></div>
+                    </div>
+                    <span class="share-pct" x-text="row.context_length ? `${row.occupancy_pct.toFixed(1)}%` : '—'"></span>
+                  </td>
+                  <td x-text="row.messages.toLocaleString()"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </section>
         <table class="data compact" x-show="!drilldown.loading">
           <thead><tr><th>Time</th><th>Model</th><th>Branch</th><th>Input</th><th>Output</th><th>Cache R/W</th><th>Cost</th></tr></thead>
           <tbody>
@@ -382,6 +720,55 @@
             </template>
           </tbody>
         </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" x-show="sessionDeleteModal.open" @click.self="closeSessionDeleteModal()" x-cloak>
+    <div class="modal small confirm">
+      <header class="modal-header">
+        <div>
+          <h3>Delete session permanently</h3>
+          <p class="modal-sub" x-text="sessionDeleteModal.session ? (formatPath(sessionDeleteModal.session.cwd || sessionDeleteModal.session.project_slug) || sessionDeleteModal.session.session_id) : ''"></p>
+        </div>
+        <button class="ghost" @click="closeSessionDeleteModal()">Close</button>
+      </header>
+      <div class="modal-body">
+        <div class="danger-panel">
+          <strong>Warning: destructive action.</strong> This permanently removes the session transcript from local session storage, removes matching history metadata, optionally creates backup files and directories, clears it from the amatoken database, and reloads the dashboard.
+        </div>
+        <p class="hint" x-show="sessionDeleteModal.loading">Inspecting local artifacts…</p>
+        <div x-show="!sessionDeleteModal.loading && sessionDeleteModal.preview">
+          <p class="danger-copy"><strong x-text="`${sessionDeleteModal.preview.file_count} artifact(s)`"></strong> and <strong x-text="`${sessionDeleteModal.preview.removed_lines} line(s)`"></strong> will be changed.</p>
+          <label class="toggle destructive-toggle">
+            <input type="checkbox" x-model="sessionDeleteModal.backup"/>
+            <span>Create backup before delete</span>
+          </label>
+          <p class="hint" x-text="sessionDeleteModal.backup ? 'Backup files and directories will be created before deletion.' : 'Deletion will run without backup files.'"></p>
+          <table class="data compact">
+            <thead><tr><th>Artifact</th><th>Change</th></tr></thead>
+            <tbody>
+              <template x-for="file in sessionDeleteModal.preview.files" :key="file.source_file">
+                <tr>
+                  <td class="ellipsis-row" x-text="file.source_file"></td>
+                  <td x-text="file.removed_lines ? `${file.removed_lines} line(s)` : (file.change || file.kind || 'backup')"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+          <label style="display:flex; flex-direction:column; gap:.35rem; margin-top:1rem;">
+            <span>Type <code>DELETE</code> to confirm</span>
+            <input type="text" x-model="sessionDeleteModal.confirmText" placeholder="DELETE" style="background:var(--panel); color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:.55rem .7rem;"/>
+          </label>
+        </div>
+        <p class="hint" x-show="sessionDeleteModal.error" x-text="sessionDeleteModal.error" style="color: var(--danger);"></p>
+        <div class="confirm-actions">
+          <button class="ghost" @click="closeSessionDeleteModal()" :disabled="sessionDeleteModal.deleting">Cancel</button>
+          <button class="danger" @click="confirmSessionDelete()" :disabled="sessionDeleteModal.loading || sessionDeleteModal.deleting || !sessionDeleteModal.preview || sessionDeleteModal.confirmText !== 'DELETE'">
+            <span x-show="!sessionDeleteModal.deleting">Delete permanently</span>
+            <span x-show="sessionDeleteModal.deleting">Deleting…</span>
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -421,6 +808,41 @@
     </div>
   </div>
 
+  <div class="modal-backdrop" x-show="rtkModal.open" @click.self="closeRTKModal()" @keydown.escape.window="closeRTKModal()" x-cloak>
+    <div class="modal small">
+      <header class="modal-header">
+        <div>
+          <h3 x-text="rtkModal.title"></h3>
+          <p class="modal-sub" x-text="rtkModal.subtitle"></p>
+        </div>
+        <button class="ghost" @click="closeRTKModal()">Close</button>
+      </header>
+      <div class="modal-body">
+        <table class="data compact">
+          <thead>
+            <tr>
+              <th x-text="rtkModal.firstHeader"></th>
+              <th>Value</th>
+              <th>Share</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="row in rtkModal.rows" :key="row.label">
+              <tr>
+                <td x-text="row.label" class="ellipsis-row"></td>
+                <td x-text="row.formatted"></td>
+                <td>
+                  <div class="share-bar"><div class="share-fill" :style="`width: ${row.pct.toFixed(1)}%`"></div></div>
+                  <span class="share-pct" x-text="row.pct.toFixed(1) + '%'"></span>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop" x-show="confirmModal.open" @click.self="confirmNo()" @keydown.escape.window="confirmNo()" x-cloak>
     <div class="modal small confirm">
       <header class="modal-header">
@@ -437,9 +859,9 @@
   </div>
 
   <footer>
-    <span>© 2026 amatoken — All rights reserved.</span>
+    <span>© 2026 Bedatty-Engineering. All rights reserved.</span>
     <span class="dot">·</span>
-    <span>Self-hosted Claude usage monitor</span>
+    <span>AI cost, usage and session operations dashboard</span>
   </footer>
 
   <div class="system-resources" :class="!showResources && 'hidden'">

@@ -1,41 +1,42 @@
 #!/usr/bin/env bash
 #
-# amatoken update
+# amatoken dev update — local development
 #
-#   curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/scripts/update.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/Bedatty-Engineering/amatoken/main/scripts/update.sh | bash -s -- -y
+#   ./scripts/dev-update.sh
+#   ./scripts/dev-update.sh -y
 #
-# Pulls the latest code, rebuilds the image and restarts the container.
+# Rebuilds the Docker image from local changes and restarts the container.
+# Unlike update.sh, this does NOT pull from git — it uses your current working tree.
+# Perfect for testing local modifications without committing.
+#
 # Existing data (SQLite volume, budgets, manual pricing, settings) is preserved.
 #
 # Flags:
-#   -y, --yes        non-interactive
-#   -d, --dir DIR    install dir (default: $HOME/.amatoken)
-#   -b, --branch B   git branch / ref (default: main)
+#   -y, --yes        non-interactive (skip confirmation)
+#   -d, --dir DIR    project directory (default: current dir)
 #   -h, --help       show this help
 
 set -euo pipefail
 
-INSTALL_DIR="${AMATOKEN_DIR:-$HOME/.amatoken}"
-BRANCH="${AMATOKEN_BRANCH:-main}"
+PROJECT_DIR="."
 ASSUME_YES=0
 
 c_red()   { printf '\033[31m%s\033[0m' "$*"; }
 c_green() { printf '\033[32m%s\033[0m' "$*"; }
 c_blue()  { printf '\033[34m%s\033[0m' "$*"; }
+c_yellow(){ printf '\033[33m%s\033[0m' "$*"; }
 
 info() { echo "$(c_blue '==>') $*"; }
 ok()   { echo "$(c_green '✓') $*"; }
-warn() { echo "$(c_red '!') $*" >&2; }
-die()  { warn "$*"; exit 1; }
+warn() { echo "$(c_yellow '!') $*" >&2; }
+die()  { echo "$(c_red '✗') $*" >&2; exit 1; }
 
-usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+usage() { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     -y|--yes)    ASSUME_YES=1; shift ;;
-    -d|--dir)    INSTALL_DIR="$2"; shift 2 ;;
-    -b|--branch) BRANCH="$2"; shift 2 ;;
+    -d|--dir)    PROJECT_DIR="$2"; shift 2 ;;
     -h|--help)   usage ;;
     *)           die "unknown flag: $1 (use --help)" ;;
   esac
@@ -51,12 +52,12 @@ need() { command -v "$1" >/dev/null 2>&1 || die "missing dependency: $1"; }
 
 # --- pre-flight ----------------------------------------------------------
 need docker
-need git
 
-[ -d "$INSTALL_DIR/.git" ] || die "$INSTALL_DIR is not an amatoken checkout. Did you run install.sh?"
+[ -d "$PROJECT_DIR" ] || die "directory not found: $PROJECT_DIR"
+[ -f "$PROJECT_DIR/Dockerfile" ] || die "Dockerfile not found in $PROJECT_DIR"
 
 if ! docker info >/dev/null 2>&1; then
-  die "docker daemon not reachable."
+  die "docker daemon not reachable"
 fi
 
 COMPOSE=""
@@ -66,32 +67,19 @@ elif command -v docker-compose >/dev/null 2>&1; then
   COMPOSE="docker-compose"
 fi
 
-cd "$INSTALL_DIR"
+cd "$PROJECT_DIR"
 
-# --- show what will change -----------------------------------------------
-info "Fetching origin/$BRANCH"
-git fetch --quiet origin "$BRANCH"
-
-LOCAL=$(git rev-parse HEAD)
-REMOTE=$(git rev-parse "origin/$BRANCH")
-
-if [ "$LOCAL" = "$REMOTE" ]; then
-  ok "Already up to date ($LOCAL)"
-  if ! confirm "Rebuild and restart anyway?"; then
-    exit 0
-  fi
-else
-  echo
-  echo "Incoming commits:"
-  git --no-pager log --oneline "${LOCAL}..${REMOTE}" | sed 's/^/  /'
-  echo
-  confirm "Apply update?" || die "aborted"
+# --- status ----------------------------------------------------------
+info "Rebuilding from local changes"
+if [ -d .git ]; then
+  CURRENT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+  echo "  Branch: $BRANCH @ $CURRENT"
 fi
-
-# --- pull ----------------------------------------------------------------
-info "Resetting to origin/$BRANCH"
-git reset --hard "origin/$BRANCH"
-ok "Source updated to $(git rev-parse --short HEAD)"
+echo "  Path: $(pwd)"
+echo
+confirm "Rebuild and restart container?" || die "aborted"
+echo
 
 # --- rebuild & restart ---------------------------------------------------
 if [ -n "$COMPOSE" ]; then
@@ -108,7 +96,7 @@ else
     --user "0:0" \
     -p "${PORT}:2002" \
     -v "$HOME/.claude/projects:/claude-projects" \
-    -v "$HOME/.local/share/rtk:/rtk-data" \
+    -v "${HOME}/.local/share/rtk:/rtk-data" \
     -v "$HOME/.codex:/codex-home:ro" \
     -v amatoken-db:/data \
     -e RTK_DB_PATH=/rtk-data/history.db \
@@ -124,6 +112,11 @@ info "Waiting for $URL/healthz"
 for i in $(seq 1 30); do
   if curl -fsS "$URL/healthz" >/dev/null 2>&1; then
     ok "amatoken is up at $(c_green "$URL")"
+    if command -v xdg-open >/dev/null 2>&1; then
+      xdg-open "$URL" &>/dev/null &
+    elif command -v open >/dev/null 2>&1; then
+      open "$URL" &>/dev/null &
+    fi
     exit 0
   fi
   sleep 1

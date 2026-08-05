@@ -12,6 +12,7 @@ import (
 	"github.com/bedatty/amatoken/internal/httpapi"
 	"github.com/bedatty/amatoken/internal/ingest"
 	"github.com/bedatty/amatoken/internal/pricing"
+	"github.com/bedatty/amatoken/internal/rtkgain"
 	"github.com/bedatty/amatoken/internal/seed"
 	"github.com/bedatty/amatoken/internal/storage"
 )
@@ -37,6 +38,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("PRICING_SYNC_INTERVAL: %v", err)
 	}
+	codexModelsPath := env("CODEX_MODELS_CACHE_PATH", "")
 
 	db, err := storage.Open(dbPath)
 	if err != nil {
@@ -64,12 +66,37 @@ func main() {
 		}
 	}()
 
+	codexRoot := env("CODEX_SESSIONS_DIR", "")
+	if codexRoot != "" {
+		codexModel := env("CODEX_MODEL", "gpt-5.5")
+		codexScanner := ingest.NewCodexScanner(repo, codexRoot, codexModel)
+		codexWatcher := ingest.NewWatcher(codexScanner, interval)
+		go func() {
+			if err := codexWatcher.Run(ctx); err != nil && err != context.Canceled {
+				log.Printf("codex watcher: %v", err)
+			}
+		}()
+		log.Printf("codex: watching %s (model=%s)", codexRoot, codexModel)
+	}
+
 	registry := pricing.NewRegistry(repo, pricing.NewOpenRouter(), pricingInterval)
 	go registry.Run(ctx)
 
+	rtkDBPath := env("RTK_DB_PATH", "")
+	rtkConfigured := rtkDBPath != ""
+	rtkInitError := ""
+	rtkReader, err := rtkgain.New(rtkDBPath)
+	if err != nil {
+		rtkInitError = err.Error()
+		log.Printf("rtk: init failed: %v (continuing without RTK tab)", err)
+	} else if rtkReader != nil {
+		log.Printf("rtk: opened RTK database at %s", rtkDBPath)
+		defer rtkReader.Close()
+	}
+
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           httpapi.New(repo, scanner, registry).Router(),
+		Handler:           httpapi.New(repo, scanner, registry, rtkReader, rtkConfigured, rtkInitError, codexModelsPath).Router(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
