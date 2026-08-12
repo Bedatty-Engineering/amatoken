@@ -155,12 +155,18 @@ if [ "$ASSUME_YES" -eq 0 ] && confirm "Open $URL in your browser?"; then
   fi
 fi
 
+if [ -n "$COMPOSE" ]; then
+  LOGS_CMD="$COMPOSE logs -f"
+else
+  LOGS_CMD="docker logs -f amatoken"
+fi
+
 cat <<EOF
 
 $(c_green 'Done.') Quick reference:
 
   $(c_dim '# follow logs')
-  cd $INSTALL_DIR && ${COMPOSE:-docker} logs -f${COMPOSE:+ }${COMPOSE:+}${COMPOSE:-amatoken}
+  cd $INSTALL_DIR && $LOGS_CMD
 
   $(c_dim '# stop')
   cd $INSTALL_DIR && ${COMPOSE:-docker rm -f amatoken}${COMPOSE:+ down}
